@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
 import pytest
 
 from kiln import cli
+from kiln.steps import _ffmpeg
+
+_SAMPLE = Path(__file__).parent / "fixtures" / "sample.mp4"
 
 
 def _write_config(tmp_path: Path, masters: str = "", exports: str = "") -> Path:
@@ -63,18 +67,20 @@ def test_status_reports_counts(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert "seed" in out
 
 
+@pytest.mark.skipif(not _ffmpeg.have_ffmpeg(), reason="ffmpeg required")
 def test_serve_once_processes_a_drop(tmp_path: Path) -> None:
     cfg = _write_config(tmp_path, masters=str(tmp_path / "m"), exports=str(tmp_path / "e"))
     folder = tmp_path / "inbox" / "oneshot"
     folder.mkdir(parents=True)
-    folder_job = {"job_id": "oneshot", "jobs": {"transcode": True, "captions": True}}
+    # Request only the headless ffmpeg steps and use the real sample clip.
+    folder_job = {"job_id": "oneshot", "jobs": {"transcode": True, "normalize": True}}
     (folder / "job.json").write_text(json.dumps(folder_job))
-    (folder / "master.mov").write_bytes(b"MASTER")
+    shutil.copyfile(_SAMPLE, folder / "master.mp4")
     old = time.time() - 10
     for p in folder.iterdir():
         os.utime(p, (old, old))
 
     rc = cli.main(["--config", str(cfg), "serve", "--once"])
     assert rc == 0
-    assert (tmp_path / "m" / "oneshot" / "master.mov").exists()
+    assert (tmp_path / "m" / "oneshot" / "master.mp4").exists()
     assert (tmp_path / "e" / "oneshot" / "upload.mp4").exists()

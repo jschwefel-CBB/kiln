@@ -35,16 +35,20 @@ class Step(Protocol):
 
 
 def _build_registry() -> dict[str, Callable[[StepContext], StepResult]]:
-    """Map step name -> callable. Phase 2 wires no-ops; Phase 3 repoints to real modules."""
-    from kiln.steps import noop
+    """Map step name -> the real step module's run (Phase 3).
+
+    The no-op module (kiln.steps.noop) stays in the tree for a possible future
+    --dry-run, but is no longer wired here.
+    """
+    from kiln.steps import chapters, metadata, normalize, transcode, transcribe, upscale
 
     return {
-        "transcode": noop.transcode,
-        "normalize": noop.normalize,
-        "transcribe": noop.transcribe,
-        "chapters": noop.chapters,
-        "metadata": noop.metadata,
-        "upscale": noop.upscale,
+        "transcode": transcode.run,
+        "normalize": normalize.run,
+        "transcribe": transcribe.run,
+        "chapters": chapters.run,
+        "metadata": metadata.run,
+        "upscale": upscale.run,
     }
 
 

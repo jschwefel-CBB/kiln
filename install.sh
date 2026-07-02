@@ -8,6 +8,16 @@
 #   3. Install and enable the systemd unit.
 #   4. Run `kiln doctor` to verify GPU detection and storage reachability.
 #
+# External-tool prerequisites (the pipeline steps shell out to these):
+#   * ffmpeg with NVENC          — required for transcode/normalize (and upscale reassembly).
+#   * faster-whisper             — installed via the `ai` extra (pip install .[ai]); for GPU
+#                                  transcription the host also needs NVIDIA cuBLAS + cuDNN
+#                                  runtime libs on the library path (else it falls back to CPU).
+#   * ollama + a pulled model    — required for the metadata step (default: `ollama pull llama3.1:8b`).
+#   * realesrgan-ncnn-vulkan     — OPTIONAL, only for the opt-in upscale step. Phase 4's
+#                                  install_realesrgan() will fetch the prebuilt release + models
+#                                  into ${INSTALL_DIR}/bin; upscale skips cleanly if it is absent.
+#
 # Run with: sudo ./install.sh
 #
 # This is a scaffold. It intentionally refuses to run until Phase 4 implements it, so a

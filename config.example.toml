@@ -73,7 +73,17 @@ retention_days = 90
 whisper_model = "auto"
 
 # Ollama model for metadata drafts. Runs on GPU if available, else CPU.
+# Prerequisite: pull it first ->  ollama pull llama3.1:8b
+# (the metadata step skips cleanly with a clear message if Ollama isn't running or the
+#  model isn't pulled).
 llm_model = "llama3.1:8b"
+
+# Step prerequisites, in short:
+#   transcode / normalize : ffmpeg with NVENC (GPU) — software x264/x265 fallback otherwise.
+#   transcribe            : faster-whisper (pip install .[ai]); GPU needs cuBLAS+cuDNN libs,
+#                           else it runs on CPU.
+#   metadata              : ollama running + the model above pulled.
+#   upscale (opt-in)      : the realesrgan-ncnn-vulkan binary on PATH; skipped if absent.
 
 # ---------------------------------------------------------------------------
 # Transcode defaults
