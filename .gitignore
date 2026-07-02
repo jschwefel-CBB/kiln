@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local config (never commit real paths/secrets — see config.example.toml)
+config.toml
+
+# Runtime/working data
+/var/lib/kiln/
+*.log
+
+# Test media artifacts (keep tests/data/ sample clips, ignore generated outputs)
+tests/data/_out/
+tests/data/scratch/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp

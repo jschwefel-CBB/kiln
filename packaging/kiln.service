@@ -1,0 +1,24 @@
+[Unit]
+Description=kiln — GPU video post-processing pipeline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as a dedicated, unprivileged service user created by install.sh.
+User=kiln
+Group=kiln
+WorkingDirectory=/opt/kiln
+# The watcher blocks, servicing the inbox + submit endpoint and driving the queue.
+ExecStart=/opt/kiln/.venv/bin/kiln --config /opt/kiln/config.toml watch
+Restart=on-failure
+RestartSec=5
+
+# Hardening (relaxed where GPU access requires it).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

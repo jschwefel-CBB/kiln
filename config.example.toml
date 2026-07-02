@@ -1,0 +1,66 @@
+# kiln configuration — copy to config.toml and edit for your machine.
+# No real paths or secrets are committed to the repo; this file is a documented template.
+
+# ---------------------------------------------------------------------------
+# Storage paths (the three that matter most)
+# ---------------------------------------------------------------------------
+
+# $INBOX — where masters are dropped. This is a LOCAL directory on the kiln box,
+# typically exported to your workstation as an SMB share so the editor can write
+# straight into it. kiln watches this directory for new job folders.
+inbox = "/var/lib/kiln/inbox"
+
+# $SCRATCH — local working space on fast NVMe. All processing happens here so no
+# network I/O occurs mid-job. Cleared automatically after a job is archived.
+scratch_dir = "/var/lib/kiln/scratch"
+
+# $ARCHIVE — the final, write-once destination for masters + outputs. Point this
+# at your storage server mount. Leave as "" to run WITHOUT storage: completed jobs
+# hold in a local pending-archive queue and flush once you set this.
+#
+# Examples:
+#   archive = "/mnt/storage/kiln"                 # a mounted NFS/SMB share
+#   archive = "/srv/nas/video-archive/kiln"       # another local mount
+#   archive = ""                                  # no archive yet (hold locally)
+archive = ""
+
+# Where the pending-archive queue and job state live (local, persistent).
+state_dir = "/var/lib/kiln/state"
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+# Whisper model. "auto" picks the largest that fits detected VRAM (large-v3 on
+# >=~10 GB, smaller otherwise). Override with an explicit model name if desired.
+whisper_model = "auto"
+
+# Ollama model for metadata drafts. Runs on GPU if available, else CPU.
+llm_model = "llama3.1:8b"
+
+# ---------------------------------------------------------------------------
+# Transcode defaults
+# ---------------------------------------------------------------------------
+
+# "auto" selects codec by source resolution: HEVC for 4K, H.264 High for <=1080p.
+# AV1 is offered only on Ada/RTX-40-series or newer cards.
+codec = "auto"
+
+# Target loudness for the normalize step (YouTube's reference is -14 LUFS).
+target_lufs = -14
+
+# Default per-job toggles (a job.json sidecar overrides these per submission).
+[jobs]
+transcode = true
+captions  = true
+normalize = true
+chapters  = true
+metadata  = true
+upscale   = false   # opt-in; heavy on <=16 GB cards
+
+# ---------------------------------------------------------------------------
+# Submit endpoint (localhost-only instant-trigger ping; the watcher also polls)
+# ---------------------------------------------------------------------------
+[submit]
+host = "127.0.0.1"
+port = 8765

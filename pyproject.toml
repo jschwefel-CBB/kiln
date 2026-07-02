@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kiln"
+version = "0.1.0"
+description = "GPU-accelerated post-processing pipeline for video creators (source-available, BSL 1.1)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "BSL-1.1" }
+authors = [{ name = "Jason M. Schwefel" }]
+keywords = ["video", "transcode", "nvenc", "whisper", "ffmpeg", "youtube", "gpu"]
+
+# Runtime deps are intentionally minimal at scaffold time; pinned as steps are built.
+dependencies = [
+    "watchdog>=4.0",   # $INBOX filesystem watcher
+    "tomli>=2.0; python_version < '3.11'",  # tomllib is stdlib on 3.11+
+]
+
+[project.optional-dependencies]
+# AI backends are heavy; kept optional so the core installs cleanly without them.
+ai = [
+    "faster-whisper>=1.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+kiln = "kiln.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["kiln*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
