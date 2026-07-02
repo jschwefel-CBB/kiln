@@ -46,10 +46,27 @@ def _master_in(folder: Path) -> Path | None:
     return None
 
 
+def _move_file(src: Path, dst: Path) -> None:
+    """Move one file src -> dst, working across filesystems and over squashed NFS.
+
+    ``shutil.move`` falls back to ``copy2`` for a cross-filesystem move, and
+    ``copy2`` calls ``copystat`` to replicate the source's mode/mtime/flags onto
+    the destination. Over root-squashed ``sec=sys`` NFS (the normal secure export
+    config) that metadata operation is refused with ``Operation not permitted``
+    even though the bytes copy fine. The archive is write-once, so preserving the
+    source's exact mode/mtime on it has no value — copy bytes only, then unlink.
+    """
+    try:
+        os.rename(src, dst)  # fast path: same filesystem
+    except OSError:
+        shutil.copyfile(src, dst)  # bytes only — no copystat, NFS-safe
+        os.unlink(src)
+
+
 def _place(files: list[Path], dest_dir: Path) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
     for f in files:
-        shutil.move(str(f), str(dest_dir / f.name))
+        _move_file(f, dest_dir / f.name)
 
 
 def archive_or_defer(job_dir: Path, config: Config) -> bool:

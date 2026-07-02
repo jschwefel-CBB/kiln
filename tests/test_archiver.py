@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+
+import pytest
 
 from kiln.archiver import archive_or_defer, drain_pending
 from kiln.config import Config
@@ -95,3 +98,42 @@ def test_drain_completes_when_destinations_appear(tmp_path: Path) -> None:
     assert (masters / "2026-07-02_v" / "master.mov").exists()
     assert (exports / "2026-07-02_v" / "upload.mp4").exists()
     assert not (tmp_path / "state" / "pending-archive" / "2026-07-02_v").exists()
+
+
+def test_archive_across_filesystem_with_squashed_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Archive succeeds cross-filesystem even when the destination refuses chmod/chown.
+
+    Reproduces root-squashed ``sec=sys`` NFS: ``os.rename`` fails (different
+    filesystem) and any attempt to replicate source metadata (``copystat``) is
+    refused with ``PermissionError``. The archiver must copy the bytes and unlink
+    the source without ever touching destination metadata. If ``_place`` regressed
+    to ``shutil.move``/``copy2``, the ``copystat`` below would propagate and fail.
+    """
+    real_rename = __import__("os").rename
+
+    def cross_fs_rename(src: str, dst: str) -> None:
+        # Only the archiver's file placement crosses filesystems; state-dir renames
+        # (moving job folders within state/) stay on one fs and must still work.
+        if "masters" in str(dst) or "exports" in str(dst):
+            raise OSError("[Errno 18] Invalid cross-device link")
+        real_rename(src, dst)
+
+    def refuse_copystat(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("[Errno 1] Operation not permitted")
+
+    monkeypatch.setattr("kiln.archiver.os.rename", cross_fs_rename)
+    monkeypatch.setattr(shutil, "copystat", refuse_copystat)
+
+    masters = tmp_path / "masters"
+    exports = tmp_path / "exports"
+    cfg = _config(tmp_path, masters, exports)
+    job = _assembled_job(tmp_path)
+
+    fully = archive_or_defer(job, cfg)
+    assert fully is True
+    assert (masters / "2026-07-02_v" / "master.mov").read_bytes() == b"MASTER"
+    assert (exports / "2026-07-02_v" / "upload.mp4").read_bytes() == b"UPLOAD"
+    assert (exports / "2026-07-02_v" / "captions.srt").exists()
+    assert not job.exists()
