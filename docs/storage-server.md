@@ -111,4 +111,6 @@ See the kiln design spec.
    `masters_archive = "<masters/kiln mountpoint>"` and `exports_archive = "<exports/kiln mountpoint>"`.
 7. Do **not** add SLOG/L2ARC — unnecessary for write-once sequential archive over 10 GbE.
 
-A full zero-prior-experience runbook (with the TrueNAS GUI click paths) is a planned follow-up doc.
+A full zero-prior-experience build runbook (with the TrueNAS GUI click paths for
+installing, creating both pools, sharing, and mounting on deb005) lives in
+[`storage-server-runbook.md`](storage-server-runbook.md).
