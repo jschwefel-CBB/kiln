@@ -1,24 +1,36 @@
 [Unit]
 Description=kiln — GPU video post-processing pipeline
-After=network-online.target
+After=network-online.target remote-fs.target
 Wants=network-online.target
+# The NFS archive mounts are nice-to-have, not required to start (nofail); the
+# pending-archive queue holds jobs if they are absent.
 
 [Service]
 Type=simple
-# Runs as a dedicated, unprivileged service user created by install.sh.
 User=kiln
 Group=kiln
 WorkingDirectory=/opt/kiln
-# The watcher blocks, servicing the inbox + submit endpoint and driving the queue.
-ExecStart=/opt/kiln/.venv/bin/kiln --config /opt/kiln/config.toml watch
+# The service loop: watch $INBOX + the localhost submit endpoint, drive the queue,
+# archive to the two destinations. `serve` is the correct CLI command.
+ExecStart=/opt/kiln/.venv/bin/kiln --config /opt/kiln/config.toml serve
 Restart=on-failure
 RestartSec=5
 
-# Hardening (relaxed where GPU access requires it).
+# --- Hardening, relaxed exactly where kiln needs it ---
 NoNewPrivileges=true
 PrivateTmp=true
+# ProtectSystem=full makes most of the fs read-only; kiln writes only these:
 ProtectSystem=full
+ReadWritePaths=/var/lib/kiln /mnt/masters /mnt/exports
+# kiln has no business in user homes.
 ProtectHome=true
+# GPU access for NVENC (ffmpeg) and CUDA (faster-whisper / ollama client).
+DeviceAllow=/dev/nvidia0 rw
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+DeviceAllow=/dev/nvidia-modeset rw
+SupplementaryGroups=video render
 
 [Install]
 WantedBy=multi-user.target
