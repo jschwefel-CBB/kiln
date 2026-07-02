@@ -1,12 +1,18 @@
 """Configuration loading for kiln.
 
-A single ``config.toml`` (see ``config.example.toml``) defines the three storage
-paths (``inbox``, ``scratch_dir``, ``archive``), model choices, and per-job defaults.
-Environment variables of the form ``KILN_<KEY>`` override file values.
+A single ``config.toml`` (see ``config.example.toml``) defines the storage paths
+(``inbox``, ``scratch_dir``, and the two archive destinations ``masters_archive``
+and ``exports_archive``), model choices, and per-job defaults. Environment
+variables of the form ``KILN_<KEY>`` override file values.
 
 Storage paths are first-class and configurable so that:
-  * kiln runs before a storage server exists (``archive = ""`` holds jobs locally), and
-  * changing the final destination is a one-line edit, verified with ``kiln doctor``.
+  * kiln runs before a storage server exists (an empty archive path holds those
+    jobs in the local pending-archive queue), and
+  * changing a final destination is a one-line edit, verified with ``kiln doctor``.
+
+Masters and exports archive to *separate* destinations so the large,
+irreplaceable ProRes masters and the small, re-derivable export packages can sit
+on different storage tiers.
 """
 
 from __future__ import annotations
@@ -27,7 +33,9 @@ class Config:
     inbox: Path
     scratch_dir: Path
     state_dir: Path
-    archive: Path | None  # None means "no archive configured; hold jobs locally"
+    # None means "not configured; hold those jobs in the local pending-archive queue".
+    masters_archive: Path | None  # ProRes masters (large, irreplaceable; e.g. RAIDZ2)
+    exports_archive: Path | None  # export packages (re-derivable, kept forever; e.g. RAIDZ1)
     whisper_model: str = "auto"
     llm_model: str = "llama3.1:8b"
     codec: str = "auto"

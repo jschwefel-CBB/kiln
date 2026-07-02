@@ -87,13 +87,15 @@ inbox = "/var/lib/kiln/inbox"
 # Local working space (fast NVMe). Processing happens here.
 scratch_dir = "/var/lib/kiln/scratch"
 
-# Final archive destination — your storage server mount. Leave empty to hold jobs
-# locally in the pending-archive queue until you set it.
-archive = "/mnt/storage/kiln"   # e.g. an NFS or SMB mount; "" is valid
+# Two final archive destinations — your storage server mounts. The large ProRes
+# master and the small, re-derivable export package land on separate pools. Leave
+# either empty to hold those pieces locally in the pending-archive queue until set.
+masters_archive = "/mnt/masters/kiln"   # e.g. a protected (RAIDZ2) NFS/SMB mount; "" is valid
+exports_archive = "/mnt/exports/kiln"   # e.g. a cheaper (RAIDZ1) NFS/SMB mount; "" is valid
 ```
 
 Changing where finished work lands is a one-line edit here — run `kiln doctor` to confirm
-the new path is reachable and writable.
+the new paths are reachable and writable.
 
 ## Usage
 

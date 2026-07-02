@@ -4,8 +4,9 @@ Subcommands:
   * ``kiln run <folder>``  — manually enqueue a job folder (master + job.json).
   * ``kiln status``        — show the processing queue, pending-archive queue, recent jobs.
   * ``kiln doctor``        — print detected GPU/VRAM/NVENC generation + AV1 support, and
-                             verify that ``$INBOX`` is writable and ``$ARCHIVE`` is
-                             reachable/writable. The one-command "is my setup correct?".
+                             verify that ``$INBOX`` is writable and both ``$MASTERS_ARCHIVE``
+                             and ``$EXPORTS_ARCHIVE`` are reachable/writable. The one-command
+                             "is my setup correct?".
 """
 
 from __future__ import annotations

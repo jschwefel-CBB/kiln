@@ -1,9 +1,13 @@
 """Archiver: the final step that moves finished work to storage.
 
-On job success, moves the master + all outputs to ``$ARCHIVE/<job_id>/`` **if** storage
-is reachable and writable. Otherwise the completed job is placed in a persistent local
-pending-archive queue; a periodic drainer retries and frees local scratch once a job is
-safely archived. This decouples day-to-day processing from storage availability.
+On job success, moves outputs to their two write-once destinations:
+  * the ProRes master   -> ``masters_archive/<job_id>/``
+  * the export package   -> ``exports_archive/<job_id>/``
+each **if** that destination is reachable and writable. Whatever cannot be moved
+(destination unset or offline) is placed in a persistent local pending-archive
+queue; a periodic drainer retries and frees local scratch once a job's pieces are
+safely archived. This decouples day-to-day processing from storage availability,
+and lets masters and exports live on separate storage tiers.
 """
 
 from __future__ import annotations

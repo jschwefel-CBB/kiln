@@ -46,16 +46,22 @@ queue). Storage is a **write-once archive at the end**, never the source.
 
 ```
 Mac Mini (FCP)                              deb005 (RTX A4000)                    Storage server
-File>Share>"Post to deb005 — <preset>"      $INBOX (local NVMe, SMB-shared)       $ARCHIVE/<jobid>/
-  or `kiln-submit` CLI                      kiln.service (systemd)                { master.mov, upload.mp4,
-  - locate/render ProRes master             - watch $INBOX + localhost submit        captions.srt, transcript.txt,
-  - write job.json sidecar          ──SMB─► - enqueue (strict-sequential, 1 GPU)     chapters.txt, metadata.md,
-  - export into deb005's $INBOX             - process on local NVMe scratch          result.json }
-    (mounted SMB share)                     - write outputs locally                        ▲
-  - (optional) ping submit endpoint         - FINAL: move master+outputs ──────────────────┘
-                                              to $ARCHIVE if reachable,
-                                              else hold in local pending-archive queue
+File>Share>"Post to deb005 — <preset>"      $INBOX (local NVMe, SMB-shared)       $MASTERS_ARCHIVE/<jobid>/
+  or `kiln-submit` CLI                      kiln.service (systemd)                  { master.mov }
+  - locate/render ProRes master             - watch $INBOX + localhost submit
+  - write job.json sidecar          ──SMB─► - enqueue (strict-sequential, 1 GPU)   $EXPORTS_ARCHIVE/<jobid>/
+  - export into deb005's $INBOX             - process on local NVMe scratch          { upload.mp4, captions.srt,
+    (mounted SMB share)                     - write outputs locally                    transcript.txt, chapters.txt,
+  - (optional) ping submit endpoint         - FINAL: move master → masters,            metadata.md, result.json }
+                                              exports → exports (each if reachable),        ▲
+                                              else hold in local pending-archive queue ─────┘
 ```
+
+The master and the export package go to **two separate destinations** — the
+large, irreplaceable master to `$MASTERS_ARCHIVE` (a protected pool, e.g. RAIDZ2)
+and the small, re-derivable export package to `$EXPORTS_ARCHIVE` (a cheaper pool,
+e.g. RAIDZ1). Either piece that cannot be moved (destination unset or offline)
+waits in the local pending-archive queue and is drained later, independently.
 
 **The contract (the seam):** a job = a folder (the master + a `job.json`) that appears in
 deb005's local `$INBOX`. Any controller (FCP Share Destination, CLI, future web UI) just puts
@@ -65,11 +71,12 @@ that folder there; deb005 just consumes it.
 - **Mac → deb005:** deb005 exposes `$INBOX` as an SMB share; the Mac mounts it and FCP exports
   the master (+ sidecar) straight into it. The folder-watcher sees the file locally.
 - **Processing:** entirely on deb005 local NVMe. No network I/O during a job.
-- **deb005 → storage (`$ARCHIVE`):** final step moves master + outputs to storage **only if
-  reachable**; otherwise the completed job waits in a local pending-archive queue and a
-  periodic drainer retries.
-- **Paths are configurable** (`$INBOX`, `scratch_dir`, `$ARCHIVE`). Works before the storage
-  server exists — jobs accumulate in the pending-archive queue until `$ARCHIVE` is set.
+- **deb005 → storage:** final step moves the master to `$MASTERS_ARCHIVE` and the export
+  package to `$EXPORTS_ARCHIVE`, each **only if reachable**; whatever cannot be moved waits
+  in a local pending-archive queue and a periodic drainer retries.
+- **Paths are configurable** (`$INBOX`, `scratch_dir`, `$MASTERS_ARCHIVE`, `$EXPORTS_ARCHIVE`).
+  Works before the storage server exists — jobs accumulate in the pending-archive queue until
+  the archive paths are set.
 - **Network:** Mac, deb005, and storage are all on 10 GbE — a 60–120 GB 4K ProRes master
   copies in ~1–2 min; not a bottleneck.
 
@@ -87,9 +94,10 @@ containers or a farm without redesigning the contract.
 - **`kiln/runner.py`** — reads `job.json`, runs selected steps in dependency order (transcribe →
   chapters/metadata depend on transcript), writes outputs locally, writes `result.json`, hands
   the job to the archiver.
-- **`kiln/archiver.py`** — final-step mover: on success move master + outputs to `$ARCHIVE/<job_id>/`
-  if storage is reachable/writable; else enqueue into a persistent local pending-archive queue.
-  A periodic drainer retries and frees local scratch once archived.
+- **`kiln/archiver.py`** — final-step mover: on success move the master to
+  `$MASTERS_ARCHIVE/<job_id>/` and the export package to `$EXPORTS_ARCHIVE/<job_id>/`, each if
+  that destination is reachable/writable; else enqueue the unmoved piece into a persistent local
+  pending-archive queue. A periodic drainer retries and frees local scratch once archived.
 - **`kiln/steps/`** — uniform `run(ctx) -> StepResult`:
   - `transcode.py` — ffmpeg NVENC (NVIDIA-only), generation-aware codec selection from the
     capability probe. `hevc_nvenc`/`h264_nvenc` baseline; `av1_nvenc` only on Ada/RTX-40+;
@@ -104,10 +112,12 @@ containers or a farm without redesigning the contract.
 - **`kiln/hwprobe.py`** — runtime capability probe: NVIDIA GPU model + compute capability
   (→ NVENC generation → AV1 availability), VRAM (→ Whisper tier), CUDA availability, ffmpeg encoders.
 - **`kiln/cli.py`** — `kiln status`, `kiln run <folder>`, `kiln doctor` (prints detected
-  GPU/VRAM/NVENC-gen + AV1; verifies `$INBOX` writable and `$ARCHIVE` reachable; checks models).
+  GPU/VRAM/NVENC-gen + AV1; verifies `$INBOX` writable and both `$MASTERS_ARCHIVE` /
+  `$EXPORTS_ARCHIVE` reachable; checks models).
 - **`kiln/config.py` + `config.toml`** — first-class storage config: `inbox` (local, SMB-shared),
-  `scratch_dir` (local), `archive` (storage mount). `config.example.toml` documents local/SMB/NFS.
-  No paths committed. Works with `archive` unset. Env-var overrides.
+  `scratch_dir` (local), `masters_archive` and `exports_archive` (two storage mounts).
+  `config.example.toml` documents local/SMB/NFS. No paths committed. Works with either archive
+  path unset. Env-var overrides.
 - **`packaging/kiln.service`** — systemd unit; runs from `/opt/kiln` as a dedicated user.
 - **`install.sh`** — service user, pinned venv, install to `/opt/kiln`, enable unit, run `kiln doctor`.
 
@@ -130,20 +140,23 @@ supports pruning the archived master after a rolling window while keeping the co
 upload + artifacts permanently. Rules:
 - A scheduled sweep (or a step run on a timer) deletes masters whose archive age exceeds
   `retention_days` (config; default 90).
-- **Fail-safe:** a master is deleted only if the upload and all derived artifacts are
-  confirmed present in `$ARCHIVE/<job_id>/`. Never prune when outputs are missing.
+- **Fail-safe:** because the master and its exports live on *separate* pools, a master is
+  deleted only if `$EXPORTS_ARCHIVE` is reachable **and** the upload plus all derived
+  artifacts are confirmed present in `$EXPORTS_ARCHIVE/<job_id>/`. Never prune when the
+  exports pool is offline or any output is missing.
 - **Off by default** (`prune_masters = false` in config) so a fresh/open-source install never
   deletes anyone's masters unexpectedly; the operator opts in explicitly.
 - **Per-video override:** `"keep_master": true` in `job.json` pins that video's master
   permanently, exempting it from the sweep (evergreen/flagship/licensable content).
 
-**Outputs** (produced locally, then archived to `$ARCHIVE/<job_id>/` with the master):
-`upload.mp4`, `captions.srt`, `transcript.txt`, `chapters.txt`, `metadata.md`, `job.log`, `result.json`.
+**Outputs** (produced locally, then archived to `$EXPORTS_ARCHIVE/<job_id>/`, separate from the
+master in `$MASTERS_ARCHIVE/<job_id>/`): `upload.mp4`, `captions.srt`, `transcript.txt`,
+`chapters.txt`, `metadata.md`, `job.log`, `result.json`.
 
 **Error/observability:** steps fail-isolated (recorded in `result.json`; independent steps still
 run); failed jobs move to a local `failed/` dir (never archived, never silently dropped); per-job
-`job.log`. A job archives only after processing succeeds; if `$ARCHIVE` is unreachable it waits in
-the pending-archive queue rather than failing.
+`job.log`. A job archives only after processing succeeds; if either archive destination is
+unreachable the affected pieces wait in the pending-archive queue rather than failing.
 
 ### Mac-side controller (separate spec; built on the Mac)
 
@@ -173,13 +186,13 @@ FCP 12.3 (2026-06-30) added on-device AI that partially overlaps kiln:
 ## Verification
 
 - **Unit:** each step tested against a committed sample clip; GPU steps degrade gracefully without CUDA.
-- **Integration:** drop a sample ProRes master into `$INBOX/` → outputs produced locally, then land
-  (with the master) in `$ARCHIVE/<job_id>/`.
+- **Integration:** drop a sample ProRes master into `$INBOX/` → outputs produced locally, then the
+  master lands in `$MASTERS_ARCHIVE/<job_id>/` and the export package in `$EXPORTS_ARCHIVE/<job_id>/`.
 - **Manual:** play `upload.mp4` (correct codec per source resolution); eyeball `.srt` sync; confirm
   -14 LUFS via ffmpeg loudnorm stats; sanity-check `chapters.txt` and `metadata.md`.
 - **Service:** `systemctl status kiln`; `journalctl -u kiln`; `kiln status` shows both queues.
 - **Resilience:** two videos at once → strict-sequential; restart mid-queue → resumes.
-- **Archive-when-reachable:** `$ARCHIVE` unreachable → job processes, outputs stay local, enters
-  pending-archive; make reachable → drainer moves + frees scratch.
+- **Archive-when-reachable:** either archive path unreachable → job processes, the affected pieces
+  stay local in pending-archive; make reachable → drainer moves them + frees scratch.
 - **Portability:** `kiln doctor` reports the A4000 (Ampere, no AV1) and selects large-v3 + HEVC/H.264.
 - **Hygiene:** no user-specific path, secret, or `superpowers` path in the repo; `LICENSE` is BSL 1.1.
