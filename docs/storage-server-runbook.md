@@ -5,10 +5,11 @@ hardware to two working, mounted archive pools. It assumes you have **never used
 TrueNAS before**. Every screen and button is named exactly as it appears.
 
 For *why* the hardware and pool layout are the way they are — the drive
-inventory, the RAIDZ2/RAIDZ1 choice, the masters/exports split — see the
-companion design doc [`storage-server.md`](storage-server.md). This runbook is
-the *how*; that doc is the *why*. Where they overlap (slot numbers, pool names),
-`storage-server.md` is the source of truth.
+inventory, the RAIDZ2 choice for both pools, why the big drives hold `exports`
+and the small drives hold `masters` — see the companion design doc
+[`storage-server.md`](storage-server.md). This runbook is the *how*; that doc is
+the *why*. Where they overlap (slot numbers, pool names), `storage-server.md` is
+the source of truth.
 
 > **Product-name note:** TrueNAS dropped the old "CORE vs. SCALE" branding. The
 > free, open-source download is now labeled **"TrueNAS Community Edition"** on
@@ -24,8 +25,8 @@ the *how*; that doc is the *why*. Where they overlap (slot numbers, pool names),
 | Pool | Drives (bay slots) | ZFS layout | ~Usable | Holds |
 |------|--------------------|------------|---------|-------|
 | **boot** | 2× M.2 | mirror | — | the OS only |
-| **masters** | 14×400 GB + 2×480 GB (slots 5, 6, 11–24) | one 16-wide **RAIDZ2** vdev | ~5.2 TiB | kiln `$MASTERS_ARCHIVE` — ProRes masters |
-| **exports** | 4×900 GB + 4×800 GB (slots 1–4, 7–10) | two vdevs in one pool: **RAIDZ1**(4×900) + **RAIDZ1**(4×800) | ~4.7 TiB | kiln `$EXPORTS_ARCHIVE` — export packages + general shares |
+| **masters** | 16×400 GB | one 16-wide **RAIDZ2** vdev | ~5 TiB | kiln `$MASTERS_ARCHIVE` — ProRes masters (transient, pruned) |
+| **exports** | 10×1.8 TB | one 10-wide **RAIDZ2** vdev | ~13 TiB | kiln `$EXPORTS_ARCHIVE` — export packages (forever) + general shares |
 
 Two datasets get shared to the rest of the network:
 
@@ -39,8 +40,16 @@ deb005 then points its `config.toml` at those two mounts and kiln is done.
 
 ## Before you start — checklist
 
-- [ ] The **UCSC-SAS-M5HD** HBA is installed and CIMC shows all 24 SAS drives as
-      **JBOD / Good** (already verified 2026-07-01 — see `storage-server.md`).
+- [ ] **Disks are laid out for the pool plan (2026-07-02):** the **16× 400 GB** drives
+      and the **10× 1.8 TB** drives are installed; the 4×900 GB, 4×800 GB, and 2×480 GB
+      drives are **pulled** (shelf as spares). See `storage-server.md` → "Drive plan
+      change" and build-step 0 for the bay math.
+- [ ] The **UCSC-SAS-M5HD** HBA is installed and CIMC shows all pool drives as
+      **JBOD / Good** (the original 24 were verified 2026-07-01 — see `storage-server.md`).
+- [ ] Any drive that was **previously in a ZFS pool** (e.g. from the earlier `masters`
+      pool that was built then destroyed) will carry stale ZFS labels. Wipe each reused
+      drive first: **Storage → Disks → select the disk → Wipe → Quick**. Otherwise it may
+      show as unavailable when you try to add it to a new pool.
 - [ ] The **2× M.2** boot devices are present (on their own mini-controller, not
       the M5HD — they will **not** appear in the M5HD's JBOD list; that is normal).
 - [ ] A **USB stick** (8 GB+) you can erase, to write the installer to.
@@ -170,43 +179,34 @@ The installer is a simple blue text-menu. Screen by screen:
    - Click **Next**.
 4. **Screen 2 — Data (the data vdev):**
    - **Layout** dropdown → choose **`RAIDZ2`**.
-   - You want **one 16-disk vdev** of the 400/480 GB drives. The cleanest way to
-     pick exact disks is **`Manual Disk Selection`** (in the Advanced area):
+   - You want **one 16-disk vdev** of the 400 GB drives. The cleanest way to pick
+     exact disks is **`Manual Disk Selection`** (in the Advanced area):
      - Click **`Manual Disk Selection`**.
-     - The 24 SAS drives are grouped by size. Select the **fourteen ~400 GB**
-       drives (raw ≈ 381554 MB, slots 11–24) **and** the **two ~480 GB** drives
-       (raw ≈ 457862 MB, slots 5–6) — **16 disks total** — into a **single vdev**.
+     - Select **all sixteen ~400 GB** drives (raw ≈ 381554 MB) into a **single
+       vdev**. These are the smaller SSDs; the 1.8 TB drives are for `exports`.
      - Confirm the vdev shows **RAIDZ2** with **16** disks.
-     - > The two 480 GB drives are padded down to ~400 GB inside the vdev — this
-       > ~80 GB/drive waste is expected and accepted (see the design doc).
-   - *(If you use Automated Disk Selection instead:* set disk size to the 400 GB
-     group with **"Treat Disk Size as Minimum"** on so the 480s qualify, **Width
-     = 16**, **Number of VDEVs = 1**.)*
+   - *(If you use Automated Disk Selection instead:* pick the 400 GB size group,
+     **Width = 16**, **Number of VDEVs = 1**.)*
    - Do **not** configure Log / Cache / Spare / Metadata / Dedup — click
      **`Save And Go To Review`** to skip the optional screens.
 5. **Review screen:** confirm it reads **one RAIDZ2 vdev, 16 wide**, pool name
    **`masters`**. Click **`Create Pool`**.
 6. Wait for it to finish. `masters` now appears on the Storage Dashboard.
 
-## Step 7 — Create the `exports` pool (two RAIDZ1 vdevs in one pool)
+## Step 7 — Create the `exports` pool (one 10-wide RAIDZ2 vdev)
 
 1. **Storage** → **`Create Pool`** again.
 2. **Screen 1 — Name:** **`exports`**, encryption off, **Next**.
-3. **Screen 2 — Data:** you need **two** data vdevs in this one pool.
-   - **Layout** → **`RAIDZ1`**.
+3. **Screen 2 — Data:** one data vdev of the big drives.
+   - **Layout** → **`RAIDZ2`**.
    - Click **`Manual Disk Selection`**.
-   - **First vdev:** select the **four ~900 GB** drives (raw ≈ 915715 MB, slots
-     1–4) as a **RAIDZ1** vdev.
-   - Add a **second vdev**: click **`Add`** (adds another VDEV area), set it to
-     **RAIDZ1**, and select the **four ~800 GB** drives (raw ≈ 763097 MB, slots
-     7–10).
-   - Confirm **two RAIDZ1 vdevs** (4 disks each) are staged.
-   - > Never mix the 900 GB and 800 GB drives *inside one vdev* — ZFS would pad
-     > every disk down to the smallest. Keeping them in separate same-size vdevs
-     > is why there are two vdevs here.
+   - Select **all ten ~1.8 TB** drives into a **single vdev**.
+   - Confirm the vdev shows **RAIDZ2** with **10** disks.
+   - *(Automated Disk Selection alternative:* pick the 1.8 TB size group, **Width
+     = 10**, **Number of VDEVs = 1**.)*
    - **`Save And Go To Review`**.
-4. **Review:** confirm **two RAIDZ1 vdevs** under pool **`exports`** → **`Create
-   Pool`**.
+4. **Review:** confirm **one RAIDZ2 vdev, 10 wide**, pool **`exports`** →
+   **`Create Pool`**.
 5. `exports` now appears on the dashboard alongside `masters`.
 
 > **Do NOT add SLOG (Log) or L2ARC (Cache) vdevs.** This is a write-once
@@ -323,7 +323,7 @@ On **deb005** (Debian):
 ## Verification (the whole thing works)
 
 - **Storage → Storage Dashboard:** `masters` shows one RAIDZ2 vdev (16 wide);
-  `exports` shows two RAIDZ1 vdevs; both **Healthy**.
+  `exports` shows one RAIDZ2 vdev (10 wide); both **Healthy**.
 - **`kiln doctor` on deb005:** both `masters_archive` and `exports_archive`
   reachable/writable.
 - **Round-trip:** drop a small test master into kiln's `$INBOX`; after processing,

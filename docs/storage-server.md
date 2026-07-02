@@ -2,14 +2,22 @@
 
 The storage server is the archive destination for kiln. kiln processes video on the
 GPU box (`deb005`) using its local NVMe, then moves the finished work here as the
-final step — **split across two pools**: the irreplaceable ProRes master goes to the
-`masters` pool (`$MASTERS_ARCHIVE`), and the small, re-derivable export package
-(upload video + captions/transcript/chapters/metadata) goes to the `exports` pool
+final step — **split across two pools**: the ProRes master goes to the `masters` pool
+(`$MASTERS_ARCHIVE`), and the finished export package (upload video +
+captions/transcript/chapters/metadata) goes to the `exports` pool
 (`$EXPORTS_ARCHIVE`). This box is **archive + file shares only** — no scratch (that
 lives on deb005), no heavy compute.
 
-Status as of 2026-07-01: hardware assembled and verified in CIMC; **pools not yet
-created / TrueNAS not yet installed.**
+Both pools are **RAIDZ2 (double-parity)**. The role split drives *which drives* go
+where, not the parity level (see "ZFS layout" for the durability reasoning):
+`masters` holds transient data (pruned after the retention window) on the older,
+smaller SSDs; `exports` holds keep-forever, effectively-irreplaceable data on the
+newer, larger drives.
+
+Status as of 2026-07-02: hardware assembled and verified in CIMC; **pools not yet
+created / TrueNAS not yet installed.** (An initial `masters` pool was configured in
+the TrueNAS UI on 2026-07-02 and then exported/destroyed to re-lay-out the disks for
+the drive plan below.)
 
 ## Hardware
 
@@ -24,10 +32,12 @@ created / TrueNAS not yet installed.**
   ~1–2 min at line rate — network is not a bottleneck.
 - **RAM:** ECC (C240 M5). ZFS prefers ECC — confirm DIMMs populated.
 
-### Drive inventory — VERIFIED in CIMC 2026-07-01
+### Drive inventory
 
-All 24 SAS-bay drives report **JBOD / Good** via the M5HD (raw for ZFS). Note: originally
+All SAS-bay drives report **JBOD / Good** via the M5HD (raw for ZFS). Note: originally
 20×400 GB, but 4 were SATA — those were pulled and replaced with 4×800 GB SAS.
+
+**As verified in CIMC 2026-07-01 (the drives physically in the box then):**
 
 | Slots | Count | ~Size | Raw (MB) | Models |
 |-------|-------|-------|----------|--------|
@@ -36,8 +46,22 @@ All 24 SAS-bay drives report **JBOD / Good** via the M5HD (raw for ZFS). Note: o
 | 7–10  | 4     | ~800 GB | 763097 | MICRON SSD (MB19) |
 | 11–24 | 14    | ~400 GB | 381554 | **mixed** TOSHIBA (0107) + HGST (D170) |
 
+**Drive plan change (2026-07-02):** a cache of **10× 1.8 TB** SAS SSDs is being brought
+in. The pool design below is built around **16× 400 GB** + **10× 1.8 TB**. The other
+drives are removed from the pool design:
+
+- **4×900 GB (slots 1–4)** and **4×800 GB (slots 7–10)** — pulled; their bays are
+  reused for the 1.8 TB drives. Shelf as spares / future scratch pool.
+- **2×480 GB (slots 5–6)** — freed (no longer padded into `masters`). Spare them, or
+  use as slack if the `masters` pool ever needs a little more room.
+- **One of the 800 GB drives dropped and returned after a reseat** — a separate issue
+  (verify its SMART before ever trusting it), but moot for the pool design since all
+  the 800s are retired from it regardless.
+
+Bay math: 24 bays populated + 2 empty = 26. Pull the 8 small drives (4×900 + 4×800) →
+8 freed bays + 2 empty = **10 bays** for the 10× 1.8 TB drives. The 16× 400 GB stay put.
+
 - The M.2 boot pair does **not** appear in the M5HD JBOD list (it's on its own controller) — this is expected.
-- 2 front bays empty (future expansion / spares).
 - Mixed vendors in the 400 GB group is fine for ZFS (it only cares about size, not vendor/firmware).
 
 ## ZFS layout (TrueNAS SCALE)
@@ -50,33 +74,53 @@ for an irreplaceable archive and for acquisition optics.
 | Pool | Drives (slots) | ZFS layout | ~Usable | Role |
 |------|----------------|------------|---------|------|
 | **boot** | 2× M.2 | mirror | — | OS only |
-| **masters** | 14×400 + 2×480 (5,6,11–24) | **one 16-wide RAIDZ2 vdev** | **~5.2 TiB** | kiln `$MASTERS_ARCHIVE` — irreplaceable ProRes masters (double-parity); pruned after the retention window |
-| **exports** | 4×900 + 4×800 (1–4, 7–10) | 2 vdevs in one pool: RAIDZ1(4×900 ~2.5 TiB) + RAIDZ1(4×800 ~2.2 TiB) | **~4.7 TiB** | kiln `$EXPORTS_ARCHIVE` — finished export packages (re-derivable from the master, kept forever) + general SMB shares |
-| | | | **~9.9 TiB total** | |
+| **masters** | 16×400 (11–24 + 2 more) | **one 16-wide RAIDZ2 vdev** | **~5 TiB** (~24 hr 4K) | kiln `$MASTERS_ARCHIVE` — ProRes masters; **transient**, pruned after the retention window |
+| **exports** | 10×1.8 TB (1–10) | **one 10-wide RAIDZ2 vdev** | **~13 TiB** (forever) | kiln `$EXPORTS_ARCHIVE` — finished export packages, kept forever + general SMB shares |
+| | | | **~18 TiB total** | |
 
-**Why masters and exports are split across the two pools:** the ProRes master is
-irreplaceable, so it gets double-parity (RAIDZ2). The export package (upload video +
-captions/transcript/chapters/metadata) can be regenerated by re-running kiln on the
-master, so single-parity (RAIDZ1) is an acceptable, cheaper home for it. This also
-lets the `masters` pool prune old masters after the retention window while the
-`exports` pool keeps the finished packages permanently — the forever-keep data lives
-on the cheap pool, and the expensive double-parity space is reserved for the assets
-that actually need it.
+**Why the big drives hold `exports` and the small drives hold `masters` (durability-first, not capacity-first):**
 
-- The two ~480 GB drives (slots 5–6) are padded down to ~400 GB inside the `masters` RAIDZ2 —
-  user explicitly accepted the ~80 GB/drive waste for simplicity.
+The obvious instinct is "big drives → big data → masters." That's wrong here, because
+**master pruning caps how much master ever accumulates.** At ~220 GB/hr for 4K ProRes,
+the ~5 TiB `masters` pool holds ~24 hours of 4K master — more than a 90-day *active-edit*
+window realistically needs for one creator. Masters are never capacity-starved, because
+they're deleted before they can pile up.
+
+Meanwhile the export package is small but **kept forever — and becomes effectively
+irreplaceable once its master is pruned** (after pruning there is no master to re-run
+kiln against). So the assignment is driven by *durability of the irreplaceable pool*:
+
+- **`exports` → the 10× 1.8 TB drives** (newer, fewer, larger, healthier). The
+  keep-forever, irreplaceable-after-prune data rides the best hardware, in a clean
+  10-wide RAIDZ2. ~13 TiB is far more than needed — the forever pool *should* have the
+  headroom.
+- **`masters` → the 16× 400 GB drives** (older, worn, mixed-vendor). Transient,
+  pruned-at-90-days data is exactly what belongs on the more-disposable drives: a lost
+  master inside its edit window can, worst case, be re-exported from the Mac's FCP
+  project; a lost master past 90 days was going to be deleted anyway.
+
+Both pools are **RAIDZ2** — this reverses the earlier design's cheap-single-parity
+choice for exports in the healthiest direction. The earlier RAIDZ1-for-exports plan
+leaned on "exports are re-derivable," which only holds for the 90 days the master
+survives; RAIDZ2 on the big drives closes that gap permanently.
+
+**Capacity caveat:** ~24 hr of 4K master is the tight number. If more than ~24 hr of
+un-pruned 4K masters could ever be in flight at once, the lever is retention (shorten
+it) or fold the two spare 480 GB drives into the `masters` pool for a little more room.
+
 - Within each pool, subdivide with **datasets** (e.g. `masters/kiln`, `exports/kiln`,
   `exports/photos`) for independent shares/snapshots/quotas — datasets give the "one
   namespace" feel without merging failure domains.
 
 ### Capacity reality (why retention matters)
 
-At ~220 GB/hr for 4K ProRes 422 HQ, the ~5.2 TiB `masters` pool holds only **~26 hours** of
-4K masters (or ~100 hrs of 1080p ProRes HQ). This is why kiln has a **master-retention/pruning**
+At ~220 GB/hr for 4K ProRes 422 HQ, the ~5 TiB `masters` pool holds only **~24 hours** of
+4K masters (or ~90 hrs of 1080p ProRes HQ). This is why kiln has a **master-retention/pruning**
 policy (keep the master for a rolling window — default 90 days — then delete it from the
-`masters` pool). The compressed upload + artifacts are kept permanently on the separate
-`exports` pool, and a master is pruned only after kiln confirms those exports are present there.
-See the kiln design spec.
+`masters` pool). This small, transient pool is deliberately on the older 400 GB drives.
+The compressed upload + artifacts are kept permanently on the separate `exports` pool
+(the 1.8 TB drives, ~13 TiB), and a master is pruned only after kiln confirms those
+exports are present there. See the kiln design spec.
 
 ## Design decisions made & rejected
 
@@ -90,8 +134,17 @@ See the kiln design spec.
 - **16-wide RAIDZ2 (not 2×8-wide) for the `masters` pool** — one wide double-parity vdev gives
   more usable capacity (only 2 drives to parity) while keeping double-parity safety. Acceptable
   rebuild time on SSD.
-- **RAIDZ1 for the `exports` pool** — acceptable single-parity because everything it holds is
-  re-derivable from the master (or is non-critical general share data). Masters never go here.
+- **10-wide RAIDZ2 for the `exports` pool** — one clean double-parity vdev over the 10× 1.8 TB
+  drives (~13 TiB). RAIDZ1 was **rejected** here: exports are "re-derivable" only for the 90 days
+  the master survives pruning, after which the package is effectively irreplaceable — so the
+  forever pool gets double parity on the newer/larger drives.
+- **Big drives → exports, small drives → masters (durability-first) — DECIDED 2026-07-02.** Not
+  "big data → big drives": pruning caps master accumulation (~24 hr of 4K fits the ~5 TiB pool),
+  so masters are never capacity-starved and can sit on the older, worn 400 GB SSDs. The
+  irreplaceable-after-prune exports ride the newer, fewer 1.8 TB drives. See the ZFS-layout
+  rationale above.
+- **900 GB + 800 GB drives in `exports` — SUPERSEDED 2026-07-02.** The original 4×900 + 4×800
+  two-RAIDZ1 `exports` pool is replaced by 10× 1.8 TB RAIDZ2. The 900s/800s are pulled and shelved.
 - **Automatic tiering (hot SSD → cold, LRU spill-down) — REJECTED / not available.** ZFS and
   TrueNAS SCALE do not support disk-speed autotiering (iX explored autotier/gluster, abandoned).
   L2ARC and special-vdev are caches, not tiering. Also pointless here: a write-once archive of
@@ -117,12 +170,16 @@ See the kiln design spec.
 
 ## Build steps (to do — not yet executed)
 
-1. **Verify** (done): M5HD shows all 24 drives as JBOD/Good; M.2 boot present.
-2. **Install TrueNAS SCALE** onto the 2× M.2 as a boot mirror (select both M.2 in the installer;
+0. **Re-lay-out disks (2026-07-02):** pull the 4×900 (slots 1–4) and 4×800 (slots 7–10); install
+   the 10× 1.8 TB drives into those 8 freed bays + the 2 empty bays. The 16× 400 GB stay put.
+   The 2×480 (slots 5–6) come out of the pool design (shelf as spares/slack). If any drive was
+   previously in a ZFS pool, **wipe it** first (Storage → Disks → select → Wipe → Quick) so stale
+   labels don't block the rebuild.
+1. **Verify:** M5HD shows all pool drives as JBOD/Good; M.2 boot present.
+2. **Install TrueNAS** onto the 2× M.2 as a boot mirror (select both M.2 in the installer;
    confirm whether the M.2 module presents one hardware-RAID volume or two devices to mirror).
-3. **Create `masters` pool:** 16 drives (slots 5,6,11–24), layout RAIDZ2, one vdev of 16.
-4. **Create `exports` pool:** two vdevs — RAIDZ1 of the 4×900 (slots 1–4) + RAIDZ1 of the 4×800
-   (slots 7–10) — in a single pool.
+3. **Create `masters` pool:** the 16× 400 GB drives, layout RAIDZ2, one vdev of 16.
+4. **Create `exports` pool:** the 10× 1.8 TB drives, layout RAIDZ2, one vdev of 10.
 5. **Datasets + sharing:** create `masters/kiln` and `exports/kiln`; enable **NFS** (for deb005)
    on both, and **SMB** (for the Mac) on `exports/kiln` (and any other general share).
 6. **Mount both on deb005** (NFS) and set kiln `config.toml`:
