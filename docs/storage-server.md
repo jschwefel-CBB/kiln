@@ -1,0 +1,99 @@
+# Storage Server — Design & Build Notes
+
+The storage server is the archive destination for kiln (`$ARCHIVE`). kiln processes
+video on the GPU box (`deb005`) using its local NVMe, then moves the master + all
+outputs here as the final step. This box is **archive + file shares only** — no scratch
+(that lives on deb005), no heavy compute.
+
+Status as of 2026-07-01: hardware assembled and verified in CIMC; **pools not yet
+created / TrueNAS not yet installed.**
+
+## Hardware
+
+- **Chassis:** Cisco UCS C240 M5 SFF, 26 drive bays (24 front + 2 rear).
+- **Storage controller:** Cisco **UCSC-SAS-M5HD** — an IT-mode-only HBA (Cisco-stamped
+  LSI 9300-8i family). Presents every drive raw/JBOD to the OS, which is what ZFS needs.
+  Already installed (user swapped one in from another UCS server — zero cost). Labeled
+  "MRAID" in CIMC but it is the SAS (HBA) variant, confirmed showing all drives as JBOD.
+- **Boot:** 2× M.2 SSD on a **separate** mini-controller (not the M5HD). Confirmed present
+  in CIMC. TrueNAS installs here as a boot mirror.
+- **Network:** 10 GbE (same as Mac + deb005). A 4K ProRes master (~220 GB/hr) copies in
+  ~1–2 min at line rate — network is not a bottleneck.
+- **RAM:** ECC (C240 M5). ZFS prefers ECC — confirm DIMMs populated.
+
+### Drive inventory — VERIFIED in CIMC 2026-07-01
+
+All 24 SAS-bay drives report **JBOD / Good** via the M5HD (raw for ZFS). Note: originally
+20×400 GB, but 4 were SATA — those were pulled and replaced with 4×800 GB SAS.
+
+| Slots | Count | ~Size | Raw (MB) | Models |
+|-------|-------|-------|----------|--------|
+| 1–4   | 4     | ~900 GB | 915715 | ATA SSD (fw GXT50F3Q) |
+| 5–6   | 2     | ~480 GB | 457862 | TOSHIBA SSD (010B) |
+| 7–10  | 4     | ~800 GB | 763097 | MICRON SSD (MB19) |
+| 11–24 | 14    | ~400 GB | 381554 | **mixed** TOSHIBA (0107) + HGST (D170) |
+
+- The M.2 boot pair does **not** appear in the M5HD JBOD list (it's on its own controller) — this is expected.
+- 2 front bays empty (future expansion / spares).
+- Mixed vendors in the 400 GB group is fine for ZFS (it only cares about size, not vendor/firmware).
+
+## ZFS layout (TrueNAS SCALE)
+
+Chosen to **maximize usable capacity while keeping the irreplaceable masters safe**.
+Software RAID via ZFS was chosen over the hardware RAID controller for end-to-end
+checksums + self-healing + snapshots + pool portability (no controller lock-in) — better
+for an irreplaceable archive and for acquisition optics.
+
+| Pool | Drives (slots) | ZFS layout | ~Usable | Role |
+|------|----------------|------------|---------|------|
+| **boot** | 2× M.2 | mirror | — | OS only |
+| **archive** | 14×400 + 2×480 (5,6,11–24) | **one 16-wide RAIDZ2 vdev** | **~5.2 TiB** | kiln `$ARCHIVE` + ProRes masters (double-parity, irreplaceable data) |
+| **bulk** | 4×900 + 4×800 (1–4, 7–10) | 2 vdevs in one pool: RAIDZ1(4×900 ~2.5 TiB) + RAIDZ1(4×800 ~2.2 TiB) | **~4.7 TiB** | **NON-critical data only** |
+| | | | **~9.9 TiB total** | |
+
+- The two ~480 GB drives (slots 5–6) are padded down to ~400 GB inside the archive RAIDZ2 —
+  user explicitly accepted the ~80 GB/drive waste for simplicity.
+- Within each pool, subdivide with **datasets** (e.g. `archive/kiln`, `archive/photos`) for
+  independent shares/snapshots/quotas — datasets give the "one namespace" feel without
+  merging failure domains.
+
+### Capacity reality (why retention matters)
+
+At ~220 GB/hr for 4K ProRes 422 HQ, the ~5.2 TiB archive holds only **~26 hours** of 4K
+masters (or ~100 hrs of 1080p ProRes HQ). This is why kiln has a **master-retention/pruning**
+policy (keep the master for a rolling window — default 90 days — then delete it, keeping the
+compressed upload + artifacts permanently). See the kiln design spec.
+
+## Design decisions made & rejected
+
+- **Software RAID (ZFS) over hardware RAID** — chosen for checksums/self-heal/snapshots/
+  portability. Required an IT-mode HBA (the M5HD), which the box now has.
+- **One giant pool across all 24 drives — REJECTED.** Adds ~0 usable capacity vs separate
+  pools, and a single vdev failure would destroy ALL data including masters. Usable capacity
+  comes from the parity choice (RAIDZ1 vs Z2), not from merging pools.
+- **Mixed-size drives in one RAIDZ vdev — REJECTED.** ZFS pads every disk in a vdev down to
+  the smallest, which would waste the 800/900 GB capacity. Hence separate pools by size.
+- **16-wide RAIDZ2 (not 2×8-wide) for archive** — one wide double-parity vdev gives more
+  usable capacity (only 2 drives to parity) while keeping double-parity safety. Acceptable
+  rebuild time on SSD.
+- **RAIDZ1 for the bulk pool** — acceptable single-parity because it holds only non-critical
+  data. Masters never go here.
+- **Automatic tiering (hot SSD → cold, LRU spill-down) — REJECTED / not available.** ZFS and
+  TrueNAS SCALE do not support disk-speed autotiering (iX explored autotier/gluster, abandoned).
+  L2ARC and special-vdev are caches, not tiering. Also pointless here: a write-once archive of
+  huge sequential files on all-same-speed SAS SSD has no hot working set to accelerate.
+
+## Build steps (to do — not yet executed)
+
+1. **Verify** (done): M5HD shows all 24 drives as JBOD/Good; M.2 boot present.
+2. **Install TrueNAS SCALE** onto the 2× M.2 as a boot mirror (select both M.2 in the installer;
+   confirm whether the M.2 module presents one hardware-RAID volume or two devices to mirror).
+3. **Create `archive` pool:** 16 drives (slots 5,6,11–24), layout RAIDZ2, one vdev of 16.
+4. **Create `bulk` pool:** two vdevs — RAIDZ1 of the 4×900 (slots 1–4) + RAIDZ1 of the 4×800
+   (slots 7–10) — in a single pool.
+5. **Datasets + sharing:** create `archive/kiln`; enable **SMB** (for the Mac) and **NFS**
+   (for deb005) on it.
+6. **Mount on deb005** (NFS) and set kiln `config.toml` `archive = "<mountpoint>"`.
+7. Do **not** add SLOG/L2ARC — unnecessary for write-once sequential archive over 10 GbE.
+
+A full zero-prior-experience runbook (with the TrueNAS GUI click paths) is a planned follow-up doc.
