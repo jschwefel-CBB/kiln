@@ -100,10 +100,28 @@ the new paths are reachable and writable.
 ## Usage
 
 ```bash
-kiln run /path/to/job-folder     # manually enqueue a job folder (master + job.json)
-kiln status                      # show the processing queue, pending-archive queue, recent jobs
-kiln doctor                      # detected GPU/VRAM/NVENC + storage checks
+# 1. Copy and edit the config for your machine.
+cp config.example.toml config.toml
+$EDITOR config.toml   # set inbox, scratch_dir, state_dir (same filesystem);
+                      # leave the archives "" to hold jobs locally for now.
+
+# 2. Verify hardware + storage.
+kiln --config config.toml doctor
+
+# 3. Run the service (Ctrl-C to stop), or process a single pass and exit.
+kiln --config config.toml serve
+kiln --config config.toml serve --once
+
+# Inspect the queues, or enqueue a folder by hand.
+kiln --config config.toml status
+kiln --config config.toml run /path/to/job-folder
 ```
+
+With the archives unset, completed jobs collect in `state_dir/pending-archive/`.
+Point `masters_archive` / `exports_archive` at real mounts and they drain
+automatically — no reprocessing. `inbox`, `scratch_dir`, and `state_dir` must be
+on the **same filesystem** (kiln moves job folders between them by atomic rename);
+`kiln doctor` checks this.
 
 A job folder contains the master and a `job.json` describing which steps to run:
 

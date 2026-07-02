@@ -44,6 +44,11 @@ exports_archive = ""
 # Where the pending-archive queue and job state live (local, persistent).
 state_dir = "/var/lib/kiln/state"
 
+# IMPORTANT: inbox, scratch_dir, and state_dir MUST be on the same filesystem.
+# kiln moves job folders (including the multi-GB master) between these by atomic
+# rename, which only works within one filesystem. `kiln doctor` verifies this.
+# (The two archive destinations MAY live on other filesystems / network mounts.)
+
 # ---------------------------------------------------------------------------
 # Master retention / pruning
 # ---------------------------------------------------------------------------
