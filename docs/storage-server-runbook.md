@@ -25,8 +25,8 @@ the source of truth.
 | Pool | Drives (bay slots) | ZFS layout | ~Usable | Holds |
 |------|--------------------|------------|---------|-------|
 | **boot** | 2× M.2 | mirror | — | the OS only |
-| **masters** | 16×400 GB | one 16-wide **RAIDZ2** vdev | ~5 TiB | kiln `$MASTERS_ARCHIVE` — ProRes masters (transient, pruned) |
-| **exports** | 10×1.8 TB | one 10-wide **RAIDZ2** vdev | ~13 TiB | kiln `$EXPORTS_ARCHIVE` — export packages (forever) + general shares |
+| **exports** | 10×1.8 TB (slots 1–10) | one 10-wide **RAIDZ2** vdev | ~13 TiB | kiln `$EXPORTS_ARCHIVE` — export packages (forever) + general shares |
+| **masters** | 14×400 GB + 2×480 GB (slots 11–26) | one 16-wide **RAIDZ2** vdev | ~5.2 TiB | kiln `$MASTERS_ARCHIVE` — ProRes masters (transient, pruned) |
 
 Two datasets get shared to the rest of the network:
 
@@ -40,12 +40,14 @@ deb005 then points its `config.toml` at those two mounts and kiln is done.
 
 ## Before you start — checklist
 
-- [ ] **Disks are laid out for the pool plan (2026-07-02):** the **16× 400 GB** drives
-      and the **10× 1.8 TB** drives are installed; the 4×900 GB, 4×800 GB, and 2×480 GB
-      drives are **pulled** (shelf as spares). See `storage-server.md` → "Drive plan
-      change" and build-step 0 for the bay math.
-- [ ] The **UCSC-SAS-M5HD** HBA is installed and CIMC shows all pool drives as
-      **JBOD / Good** (the original 24 were verified 2026-07-01 — see `storage-server.md`).
+- [ ] **Disks are laid out for the pool plan (2026-07-02) — all 26 bays full:**
+      **slots 1–10 = 10× 1.8 TB** (exports); **slots 11–26 = 14× 400 GB + 2× 480 GB**
+      (masters). The 4×900 GB and 4×800 GB drives are **pulled** (shelf as spares). See
+      `storage-server.md` → "Drive plan change" and build-step 0.
+- [ ] The **UCSC-SAS-M5HD** HBA is installed and CIMC shows all **26** drives as
+      **JBOD / Good** — including the **2 rear bays (slots 25–26)**, which the masters
+      pool now uses (verify the rear pair appears; it occasionally hangs off a different
+      connector). The original 24 were verified 2026-07-01 — see `storage-server.md`.
 - [ ] Any drive that was **previously in a ZFS pool** (e.g. from the earlier `masters`
       pool that was built then destroyed) will carry stale ZFS labels. Wipe each reused
       drive first: **Storage → Disks → select the disk → Wipe → Quick**. Otherwise it may
@@ -179,14 +181,19 @@ The installer is a simple blue text-menu. Screen by screen:
    - Click **Next**.
 4. **Screen 2 — Data (the data vdev):**
    - **Layout** dropdown → choose **`RAIDZ2`**.
-   - You want **one 16-disk vdev** of the 400 GB drives. The cleanest way to pick
-     exact disks is **`Manual Disk Selection`** (in the Advanced area):
+   - You want **one 16-disk vdev** of the smaller drives (slots 11–26): the
+     **fourteen ~400 GB** (raw ≈ 381554 MB) **and** the **two ~480 GB** (raw ≈
+     457862 MB) — **16 disks total**. The cleanest way to pick exact disks is
+     **`Manual Disk Selection`** (in the Advanced area):
      - Click **`Manual Disk Selection`**.
-     - Select **all sixteen ~400 GB** drives (raw ≈ 381554 MB) into a **single
-       vdev**. These are the smaller SSDs; the 1.8 TB drives are for `exports`.
+     - Select all **fourteen 400 GB + two 480 GB** drives into a **single vdev**.
+       (The 1.8 TB drives are already in `exports` — don't select those.)
      - Confirm the vdev shows **RAIDZ2** with **16** disks.
-   - *(If you use Automated Disk Selection instead:* pick the 400 GB size group,
-     **Width = 16**, **Number of VDEVs = 1**.)*
+     - > The two 480 GB drives are padded down to ~400 GB inside the vdev — this
+       > ~80 GB/drive waste is expected and accepted (see the design doc).
+   - *(If you use Automated Disk Selection instead:* pick the 400 GB size group with
+     **"Treat Disk Size as Minimum"** on so the 480s qualify, **Width = 16**,
+     **Number of VDEVs = 1**.)*
    - Do **not** configure Log / Cache / Spare / Metadata / Dedup — click
      **`Save And Go To Review`** to skip the optional screens.
 5. **Review screen:** confirm it reads **one RAIDZ2 vdev, 16 wide**, pool name
