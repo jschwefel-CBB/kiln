@@ -96,6 +96,24 @@ See the kiln design spec.
   TrueNAS SCALE do not support disk-speed autotiering (iX explored autotier/gluster, abandoned).
   L2ARC and special-vdev are caches, not tiering. Also pointless here: a write-once archive of
   huge sequential files on all-same-speed SAS SSD has no hot working set to accelerate.
+- **iSCSI block mounts (instead of NFS/SMB) — REJECTED.** iSCSI exports a raw block LUN that the
+  client formats with its own filesystem, which is the wrong model for this archive:
+  - It makes the data **opaque to ZFS** — the server sees one blob, not files, so you lose
+    per-file snapshots/visibility and ZFS can't tell you *which master* took a bad block. The
+    whole reason for choosing ZFS was file-level integrity on the irreplaceable masters.
+  - It is effectively **single-writer** — a LUN is owned by one host's filesystem. This design
+    has two clients (deb005 writes over NFS, the Mac browses `exports` over SMB); NFS/SMB handle
+    multiple clients on one dataset natively, iSCSI does not.
+  - It **defeats the pending-archive resilience** — kiln assumes a file share that is simply
+    reachable or not; a block device that disappears mid-write can corrupt the client-side
+    filesystem, a far worse failure than a stale NFS mount (handled cleanly by `nofail`).
+  - **macOS has no native iSCSI initiator** (needs a ~$195 third-party kext); SMB is built into
+    Finder.
+  - **No speed benefit** for this workload — iSCSI wins on low-latency random small-block I/O
+    (databases, VM disks); kiln does huge sequential ProRes copies that already saturate 10 GbE
+    over NFS. (iSCSI *would* be a reasonable backing store for a future VM/container workload on
+    the `exports` pool's general-purpose space — but that is a separate use case, not the kiln
+    archive path.)
 
 ## Build steps (to do — not yet executed)
 
