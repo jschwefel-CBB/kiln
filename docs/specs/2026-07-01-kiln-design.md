@@ -120,9 +120,22 @@ containers or a farm without redesigning the contract.
   "jobs": { "transcode": true, "captions": true, "normalize": true,
             "chapters": true, "metadata": true, "upscale": false },
   "options": { "codec": "auto", "target_lufs": -14,
-               "whisper_model": "large-v3", "llm_model": "llama3.1:8b" }
+               "whisper_model": "large-v3", "llm_model": "llama3.1:8b",
+               "keep_master": false }
 }
 ```
+
+**Master retention (pruning):** ProRes masters are large (~220 GB/hr at 4K), so kiln
+supports pruning the archived master after a rolling window while keeping the compressed
+upload + artifacts permanently. Rules:
+- A scheduled sweep (or a step run on a timer) deletes masters whose archive age exceeds
+  `retention_days` (config; default 90).
+- **Fail-safe:** a master is deleted only if the upload and all derived artifacts are
+  confirmed present in `$ARCHIVE/<job_id>/`. Never prune when outputs are missing.
+- **Off by default** (`prune_masters = false` in config) so a fresh/open-source install never
+  deletes anyone's masters unexpectedly; the operator opts in explicitly.
+- **Per-video override:** `"keep_master": true` in `job.json` pins that video's master
+  permanently, exempting it from the sweep (evergreen/flagship/licensable content).
 
 **Outputs** (produced locally, then archived to `$ARCHIVE/<job_id>/` with the master):
 `upload.mp4`, `captions.srt`, `transcript.txt`, `chapters.txt`, `metadata.md`, `job.log`, `result.json`.

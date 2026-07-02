@@ -28,6 +28,19 @@ archive = ""
 state_dir = "/var/lib/kiln/state"
 
 # ---------------------------------------------------------------------------
+# Master retention / pruning
+# ---------------------------------------------------------------------------
+# ProRes masters are large (~220 GB/hr at 4K). kiln can prune archived masters
+# after a rolling window, keeping the compressed upload + artifacts permanently.
+#
+# OFF by default — a fresh install never deletes anyone's masters. Enable
+# explicitly once you understand the behavior. A master is deleted ONLY if the
+# upload and all derived artifacts are confirmed present in the archive, and never
+# for a job whose job.json set "keep_master": true.
+prune_masters = false
+retention_days = 90
+
+# ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 
