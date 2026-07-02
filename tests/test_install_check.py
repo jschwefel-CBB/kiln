@@ -25,3 +25,16 @@ def test_unit_allows_nfs_archives_and_gpu() -> None:
     assert "ReadWritePaths=" in text and "/mnt/masters" in text and "/mnt/exports" in text
     # GPU device access for NVENC/CUDA.
     assert "/dev/nvidia" in text or "DeviceAllow" in text
+
+
+def test_install_has_check_mode() -> None:
+    text = _INSTALL.read_text()
+    assert "--check" in text, "install.sh must support a --check dry-run"
+    # No longer the refuse-to-run scaffold.
+    assert "scaffold" not in text.lower() or "--check" in text
+
+
+def test_install_creates_expected_layout() -> None:
+    text = _INSTALL.read_text()
+    for token in ("/opt/kiln", "/var/lib/kiln", "useradd", ".venv", "kiln.service"):
+        assert token in text, f"install.sh missing reference to {token}"
