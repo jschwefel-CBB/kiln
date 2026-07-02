@@ -14,10 +14,15 @@ where, not the parity level (see "ZFS layout" for the durability reasoning):
 smaller SSDs; `exports` holds keep-forever, effectively-irreplaceable data on the
 newer, larger drives.
 
-Status as of 2026-07-02: hardware assembled and verified in CIMC; **pools not yet
-created / TrueNAS not yet installed.** (An initial `masters` pool was configured in
-the TrueNAS UI on 2026-07-02 and then exported/destroyed to re-lay-out the disks for
-the drive plan below.)
+**Hostname: `ark`.**
+
+Status as of 2026-07-02: **TrueNAS is installed and running on `ark`.** An initial
+`masters` pool was configured in the UI, then exported/destroyed to re-lay-out the
+disks for the drive plan below. The `exports/kiln` dataset is shared over SMB and a
+real SMB user connects successfully from the Mac (guest access is off — see the
+runbook's SMB step). Remaining to finish the build: confirm both pools match the
+final drive plan (16-wide `masters` RAIDZ2 + 10-wide `exports` RAIDZ2), the NFS
+exports to deb005, and the deb005 mounts/config.
 
 ## Hardware
 

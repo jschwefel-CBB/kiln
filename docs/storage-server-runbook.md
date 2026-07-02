@@ -265,18 +265,44 @@ deb005 is Linux and mounts both archives over NFS.
 The Mac uses SMB (macOS's native network-share protocol) for general file access.
 Only `exports/kiln` needs SMB; masters are deb005-only.
 
-1. **Shares →** under **Windows (SMB) Shares**, click **`Add`**.
+> **Do NOT rely on guest access.** TrueNAS rejects guest/anonymous SMB logins by
+> default, and the SCALE line keeps tightening guest access because it is insecure
+> and increasingly incompatible with modern macOS. Create a real SMB user instead
+> (this also honors the one-credential-per-consumer rule). Four things must line
+> up, in this order — a user that can *log in* but not *write* means step 3 (the
+> dataset ACL) was skipped.
+
+1. **Create the SMB user.** **Credentials → Users → `Add`**:
+   - **Full Name / Username:** e.g. `kiln` (lowercase, no spaces).
+   - **Password:** set one (its own, not reused from another service).
+   - **Create New Primary Group:** leave checked.
+   - **Samba Authentication: must be ON** (usually the default). If this is off,
+     SMB login is rejected no matter what — this is the #1 cause of "rejected."
+   - **Save.**
+2. **Grant that user write access to the dataset** (this is the step that, if
+   skipped, gives a successful login but read-only / can't-write):
+   **Datasets → `exports/kiln` → Permissions → Edit** (opens the ACL editor):
+   - Set **Owner** to the new user and **Owner Group** to its group.
+   - Ensure an ACE grants that user/group **Full Control** (or at least Modify).
+   - Check **Apply Owner**, **Apply Group**, and **Apply recursively** if the
+     dataset already has contents. **Save.**
+3. **Create the SMB share.** **Shares →** under **Windows (SMB) Shares**, click **`Add`**:
    - **Path:** **`/mnt/exports/kiln`**.
-   - **Name:** **`kiln-exports`** (this is the share name the Mac sees).
-   - **Save**.
-2. If prompted to **enable the SMB service**, say **yes** (or **System Settings →
+   - **Name:** **`kiln-exports`** (this is the share name the Mac connects to).
+   - **Allow Guest Access:** leave **unchecked**.
+   - **Save.**
+4. If prompted to **enable the SMB service**, say **yes** (or **System Settings →
    Services → SMB →** **Running** on, **Start Automatically**).
-3. Create a user for the Mac to authenticate as (SMB needs an account):
-   **Credentials → Local Users → `Add`** — make a user (e.g. `mac`), give it a
-   password, and ensure the `exports/kiln` dataset permissions allow it access
-   (**Datasets → exports/kiln → Edit Permissions**).
-4. **On the Mac:** Finder → **Go → Connect to Server** (⌘K) →
-   `smb://<server-ip>/kiln-exports` → authenticate with that user.
+5. **On the Mac:** Finder → **Go → Connect to Server** (⌘K) →
+   `smb://ark/kiln-exports` (or `smb://<ark-ip>/kiln-exports` if the name doesn't
+   resolve) → choose **Registered User** and enter the username + password from
+   step 1. **Not** guest.
+
+> **If the Mac still rejects it:** macOS aggressively caches a failed SMB session.
+> Remove the server from **Keychain Access** (search `ark`) and reconnect, or run
+> `open smb://ark/kiln-exports` fresh. A rejection at the *password prompt* points
+> at step 1 (Samba Authentication); *connects but can't write* points at step 2
+> (the dataset ACL).
 
 > Masters are intentionally **not** shared over SMB — the only writer to the
 > masters pool is deb005 (kiln), over NFS. Fewer doors into the irreplaceable
@@ -336,7 +362,8 @@ On **deb005** (Debian):
 - **Round-trip:** drop a small test master into kiln's `$INBOX`; after processing,
   confirm the master lands in `/mnt/masters/<job_id>/` and the export package in
   `/mnt/exports/<job_id>/`.
-- **Mac SMB:** `smb://<server-ip>/kiln-exports` mounts and lists files.
+- **Mac SMB:** `smb://ark/kiln-exports` (or `smb://<ark-ip>/kiln-exports`) mounts
+  and lists files when connecting as the registered SMB user (not guest).
 
 ## Post-build housekeeping
 
