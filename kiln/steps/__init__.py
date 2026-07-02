@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from kiln.config import Config
 from kiln.hwprobe import HardwareProfile
@@ -32,3 +32,20 @@ class Step(Protocol):
     """Structural type all step modules satisfy via a module-level ``run``."""
 
     def __call__(self, ctx: StepContext) -> StepResult: ...
+
+
+def _build_registry() -> dict[str, Callable[[StepContext], StepResult]]:
+    """Map step name -> callable. Phase 2 wires no-ops; Phase 3 repoints to real modules."""
+    from kiln.steps import noop
+
+    return {
+        "transcode": noop.transcode,
+        "normalize": noop.normalize,
+        "transcribe": noop.transcribe,
+        "chapters": noop.chapters,
+        "metadata": noop.metadata,
+        "upscale": noop.upscale,
+    }
+
+
+STEPS: dict[str, Callable[[StepContext], StepResult]] = _build_registry()
