@@ -1,0 +1,33 @@
+# kiln config for deb005 (the RTX A4000 box). The live copy lives at
+# /opt/kiln/config.toml (installed from this file by install.sh). Local paths are on
+# the NVMe root fs (/dev/nvme0n1p2) so inbox/scratch/state share one filesystem;
+# archives are the ark NFS mounts.
+
+inbox       = "/var/lib/kiln/inbox"
+scratch_dir = "/var/lib/kiln/scratch"
+state_dir   = "/var/lib/kiln/state"
+
+# ark (172.31.1.20) NFS mounts — already mounted via /etc/fstab (_netdev,nofail).
+masters_archive = "/mnt/masters"
+exports_archive = "/mnt/exports"
+
+# Master pruning stays OFF until explicitly enabled.
+prune_masters = false
+retention_days = 90
+
+whisper_model = "auto"       # large-v3 on the A4000's VRAM (needs CUDA cuBLAS/cuDNN for GPU)
+llm_model = "llama3.1:8b"    # pulled on deb005
+codec = "auto"               # HEVC 4K / H.264 <=1080p; A4000 = no AV1
+target_lufs = -14
+
+[jobs]
+transcode = true
+captions  = true
+normalize = true
+chapters  = true
+metadata  = true
+upscale   = false            # opt-in; needs realesrgan-ncnn-vulkan
+
+[submit]
+host = "127.0.0.1"
+port = 8765
