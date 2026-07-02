@@ -13,7 +13,7 @@
 - **Live deb005 actions require per-step approval.** Every `sudo`, `apt install`, `useradd`, `systemctl`, or file write under `/opt` or `/etc` is run only after showing the exact command and getting a yes. No batching irreversible actions.
 - **Same-filesystem invariant.** `inbox`, `scratch_dir`, `state_dir` all under `/var/lib/kiln` on `/` (nvme0n1p2). `kiln doctor` verifies via `st_dev`. Archives (`/mnt/masters`, `/mnt/exports`) are NFS and MAY differ — the archiver uses `shutil.move` (cross-fs safe).
 - **No guest SMB.** The `$INBOX` Samba export uses a real user with a password, guest off — same rule proven on ark. Its own credential, not reused.
-- **Storage cutover is already done — do not redo it.** ark (172.31.1.20) NFS shares are mounted at `/mnt/masters` + `/mnt/exports`, writable, persistent in fstab (`_netdev,nofail`). Verified write+read 2026-07-02. This phase only *documents* and *points config at* them.
+- **Storage cutover is already done — do not redo it.** The storage server (`ark`) NFS shares are mounted at `/mnt/masters` + `/mnt/exports`, writable, persistent in fstab (`_netdev,nofail`). Verified write+read 2026-07-02. This phase only *documents* and *points config at* them.
 - **The service must actually start.** The scaffold's `ExecStart ... watch` is wrong — the CLI command is `serve`. Fix to `serve`. Hardening must not block the NFS archive mounts or GPU devices.
 - **Idempotent install.** `install.sh` must be safe to re-run: create-if-missing user, refresh venv, reinstall unit. A `--check` (dry-run) mode validates prerequisites without mutating.
 - **Conventional commits, personal repo, GPG-signed.**
@@ -328,7 +328,7 @@ inbox       = "/var/lib/kiln/inbox"
 scratch_dir = "/var/lib/kiln/scratch"
 state_dir   = "/var/lib/kiln/state"
 
-# ark (172.31.1.20) NFS mounts — already mounted via /etc/fstab (_netdev,nofail).
+# The storage server's NFS mounts — already mounted via /etc/fstab (_netdev,nofail).
 masters_archive = "/mnt/masters"
 exports_archive = "/mnt/exports"
 
@@ -400,7 +400,7 @@ git commit -m "docs(packaging): add deb005 config, Samba inbox stanza, and deplo
 
 - [ ] **Step 1: Dry-run first (no mutation)**
 
-Run: `cd /home/jschwefel/repositories/kiln && sudo ./install.sh --check`
+Run: from the repo root, `sudo ./install.sh --check`
 Expected: reports prerequisites (ffmpeg ✓, nvidia-smi ✓, ollama ✓, realesrgan ✗-ok) and echoes the mutations it *would* make. Review before proceeding.
 
 - [ ] **Step 2: [APPROVAL] Real install**

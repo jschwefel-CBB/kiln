@@ -5,7 +5,7 @@ from a fresh checkout to a service that processes a dropped master and archives 
 the storage server **ark**. Assumes no prior familiarity with systemd or Samba — every
 command is spelled out for Debian.
 
-> **Storage is already wired.** ark (172.31.1.20) exports two NFS shares that are
+> **Storage is already wired.** The storage server (`ark`) exports two NFS shares that are
 > already mounted on deb005 at `/mnt/masters` and `/mnt/exports` (persistent in
 > `/etc/fstab` with `_netdev,nofail`, verified writable). This runbook does **not**
 > re-mount them — see [`storage-server-runbook.md`](storage-server-runbook.md) if you

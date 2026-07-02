@@ -7,7 +7,7 @@ inbox       = "/var/lib/kiln/inbox"
 scratch_dir = "/var/lib/kiln/scratch"
 state_dir   = "/var/lib/kiln/state"
 
-# ark (172.31.1.20) NFS mounts — already mounted via /etc/fstab (_netdev,nofail).
+# The storage server's NFS mounts — already mounted via /etc/fstab (_netdev,nofail).
 masters_archive = "/mnt/masters"
 exports_archive = "/mnt/exports"
 
