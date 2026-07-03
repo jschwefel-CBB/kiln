@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from kiln.config import Config
 from kiln.hwprobe import HardwareProfile, probe
 from kiln.queue import Job
+
+# job.json "options" keys that override the corresponding Config field for one job.
+_OVERRIDABLE_OPTIONS: tuple[str, ...] = ("whisper_model", "llm_model", "codec", "target_lufs")
 
 
 @dataclass
@@ -54,6 +57,23 @@ def resolve_workdir(config: Config, job_id: str) -> Path:
     return workdir
 
 
+def effective_config(config: Config, options: dict) -> Config:
+    """Overlay a job's ``job.json`` ``options`` onto the base config.
+
+    Only the four per-job knobs (whisper_model, llm_model, codec, target_lufs) can be
+    overridden; other keys and explicit nulls are ignored, and unknown keys never leak
+    onto the Config. Resolving precedence here — once, in the runner — keeps every step
+    simple: a step just reads ``ctx.config.<field>`` and is unaware options ever existed.
+    Returns the base config unchanged when there is nothing to override.
+    """
+    overrides = {
+        key: options[key]
+        for key in _OVERRIDABLE_OPTIONS
+        if options.get(key) is not None
+    }
+    return replace(config, **overrides) if overrides else config
+
+
 def _wanted(step: str, toggles: dict[str, bool]) -> bool:
     """Is this step requested? Look up its job.json key; default off if absent."""
     key = _STEP_TO_JOB.get(step, step)
@@ -88,6 +108,9 @@ def run_job(job: Job, config: Config, hardware: HardwareProfile | None = None) -
     spec = json.loads(job_file.read_text()) if job_file.is_file() else {}
     toggles: dict[str, bool] = dict(config.jobs)
     toggles.update(spec.get("jobs", {}))
+    # Per-job options override model/codec/LUFS for this job only; steps see the result
+    # transparently through ctx.config.
+    config = effective_config(config, spec.get("options", {}))
 
     # Copy the master into the scratch workdir (processing is fully local).
     master_src = next(

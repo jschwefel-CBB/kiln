@@ -135,6 +135,12 @@ containers or a farm without redesigning the contract.
 }
 ```
 
+**Options precedence:** the four `options` knobs — `codec`, `target_lufs`,
+`whisper_model`, `llm_model` — override the matching `config.toml` value **for that one
+job**; any key omitted (or null) falls back to the config default. Precedence is resolved
+once in the runner so each step just reads its effective config and is unaware options
+exist. (`keep_master` governs retention, not a step — see Master retention.)
+
 **Master retention (pruning):** ProRes masters are large (~220 GB/hr at 4K), so kiln
 supports pruning the archived master after a rolling window while keeping the compressed
 upload + artifacts permanently. Rules:

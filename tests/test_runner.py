@@ -87,6 +87,14 @@ def _config(tmp_path: Path) -> Config:
     )
 
 
+def _config_default() -> Config:
+    """A Config with default model/codec/LUFS values, for pure-resolver tests."""
+    return Config(
+        inbox=Path("/i"), scratch_dir=Path("/s"), state_dir=Path("/st"),
+        masters_archive=None, exports_archive=None,
+    )
+
+
 def _use_noop_steps(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the STEPS registry at the no-op steps for runner-logic tests.
 
@@ -163,3 +171,98 @@ def test_failed_step_is_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert by_name["transcode"].ok is False
     assert "kaboom" in by_name["transcode"].message
     assert by_name["transcribe"].ok is True  # independent step still ran
+
+
+# --- per-job job.json options -> steps (docs/follow-ups.md gap 1) ---
+
+def _job_with_options(tmp_path: Path, jobs: dict, options: dict) -> Job:
+    folder = tmp_path / "state" / "processing" / "2026-07-02_v"
+    folder.mkdir(parents=True)
+    (folder / "master.mov").write_bytes(b"fake master bytes")
+    (folder / "job.json").write_text(
+        json.dumps({"job_id": "2026-07-02_v", "jobs": jobs, "options": options})
+    )
+    return Job.from_folder(folder)
+
+
+def _capturing_step(seen: dict):
+    """A step that records the effective config it was handed, then no-ops."""
+    def run(ctx: StepContext) -> StepResult:
+        seen["whisper_model"] = ctx.config.whisper_model
+        seen["llm_model"] = ctx.config.llm_model
+        seen["codec"] = ctx.config.codec
+        seen["target_lufs"] = ctx.config.target_lufs
+        return StepResult("transcribe", ok=True, seconds=0.0)
+    return run
+
+
+def test_effective_config_overlays_job_options() -> None:
+    """The pure resolver overlays only the four overridable knobs; other keys untouched."""
+    from kiln.runner import effective_config
+
+    base = _config_default()
+    eff = effective_config(base, {"whisper_model": "medium", "target_lufs": -16})
+    assert eff.whisper_model == "medium"      # overridden
+    assert eff.target_lufs == -16             # overridden
+    assert eff.llm_model == base.llm_model    # untouched
+    assert eff.codec == base.codec            # untouched
+    # Base config is not mutated.
+    assert base.whisper_model == "auto"
+
+
+def test_effective_config_ignores_absent_and_null_options() -> None:
+    from kiln.runner import effective_config
+
+    base = _config_default()
+    # Absent keys and explicit nulls both leave the config value intact.
+    eff = effective_config(base, {"whisper_model": None})
+    assert eff.whisper_model == base.whisper_model
+    assert effective_config(base, {}) is base  # no overrides -> same object
+
+
+def test_effective_config_ignores_unknown_option_keys() -> None:
+    from kiln.runner import effective_config
+
+    base = _config_default()
+    # Unknown keys (e.g. a toggle or a typo) must not become config attributes.
+    eff = effective_config(base, {"bogus": 1, "codec": "hevc"})
+    assert eff.codec == "hevc"
+    assert not hasattr(eff, "bogus")
+
+
+def test_run_job_threads_options_into_step_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A per-job options block reaches the step via ctx.config (approach B)."""
+    from kiln import steps
+
+    _use_noop_steps(monkeypatch)
+    seen: dict = {}
+    monkeypatch.setitem(steps.STEPS, "transcribe", _capturing_step(seen))
+
+    job = _job_with_options(
+        tmp_path,
+        jobs={"captions": True},
+        options={"whisper_model": "small", "llm_model": "qwen2.5:7b",
+                 "codec": "h264", "target_lufs": -16},
+    )
+    run_job(job, _config(tmp_path))
+    assert seen == {"whisper_model": "small", "llm_model": "qwen2.5:7b",
+                    "codec": "h264", "target_lufs": -16}
+
+
+def test_run_job_uses_config_defaults_when_no_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kiln import steps
+
+    _use_noop_steps(monkeypatch)
+    seen: dict = {}
+    monkeypatch.setitem(steps.STEPS, "transcribe", _capturing_step(seen))
+
+    job = _job(tmp_path, {"captions": True})  # no options block at all
+    run_job(job, _config(tmp_path))
+    # Falls back to the base config values.
+    assert seen["whisper_model"] == "auto"
+    assert seen["llm_model"] == "llama3.1:8b"
+    assert seen["target_lufs"] == -14
