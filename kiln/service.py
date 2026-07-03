@@ -8,6 +8,7 @@ two destinations (or deferred to the pending-archive queue) and their folder is 
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import threading
@@ -20,6 +21,11 @@ from kiln.paths import StateLayout
 from kiln.queue import ProcessingQueue
 from kiln.runner import run_job
 from kiln.watcher import make_submit_server, scan_once
+
+# Records go to the "kiln" logger. Running under systemd, stderr is captured into the
+# journal, so `journalctl -u kiln` shows this lifecycle. The CLI's `serve` command
+# configures a handler; as a library import, kiln stays silent by default.
+log = logging.getLogger("kiln")
 
 
 def _assemble(job_folder: Path, workdir: Path) -> None:
@@ -40,6 +46,7 @@ def process_one(config: Config, queue: ProcessingQueue) -> str | None:
     layout.ensure()
     workdir = config.scratch_dir / job.job_id
 
+    log.info("job %s: processing", job.job_id)
     try:
         run_job(job, config)                       # writes outputs into workdir + result.json
         _assemble(job.folder, workdir)             # artifacts now beside the master
@@ -49,8 +56,12 @@ def process_one(config: Config, queue: ProcessingQueue) -> str | None:
         # processing/ slot is now clear. Record a done marker only when fully consumed.
         if not job.folder.exists():
             (layout.done / job.job_id).mkdir(parents=True, exist_ok=True)
+            log.info("job %s: done (archived)", job.job_id)
+        else:
+            log.info("job %s: processed; archive deferred to pending-archive", job.job_id)
     except Exception as exc:
         # Processing failed: move the job folder to failed/ with a log; never archive.
+        log.warning("job %s: FAILED — %s", job.job_id, exc)
         dest = layout.failed / job.job_id
         if dest.exists():
             shutil.rmtree(dest, ignore_errors=True)
@@ -70,9 +81,12 @@ def run(config: Config, *, once: bool = False) -> None:
     layout = StateLayout(config.state_dir)
     layout.ensure()
     queue = ProcessingQueue(config.state_dir)
-    queue.recover()  # re-queue a crashed job, if any
+    recovered = queue.recover()  # re-queue a crashed job, if any
+    if recovered:
+        log.info("recovered orphaned job(s) from processing/: %s", recovered)
 
     if once:
+        log.info("kiln serve --once: single pass (inbox=%s)", config.inbox)
         scan_once(config.inbox, queue)
         process_one(config, queue)
         drain_pending(config)
@@ -80,6 +94,10 @@ def run(config: Config, *, once: bool = False) -> None:
 
     server = make_submit_server(queue, config.inbox, config.submit_host, config.submit_port)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    log.info(
+        "kiln service started: watching %s, submit endpoint http://%s:%d/submit",
+        config.inbox, config.submit_host, config.submit_port,
+    )
 
     last_drain = 0.0
     try:

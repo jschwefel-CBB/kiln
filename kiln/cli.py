@@ -144,7 +144,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         return _cmd_run(cfg, args.folder)
     if args.command == "serve":
+        import logging
+
         from kiln import service
+
+        # Send the "kiln" logger to stderr; systemd captures it into the journal. Message
+        # only (no timestamp/level prefix) — journald already stamps time and unit. Set up
+        # here (not at import) so library use and other subcommands stay silent.
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        svc_log = logging.getLogger("kiln")
+        svc_log.setLevel(logging.INFO)
+        svc_log.addHandler(handler)
 
         service.run(cfg, once=args.once)
         return 0
