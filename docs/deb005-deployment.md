@@ -190,6 +190,40 @@ password. **Not** guest. Export/copy a master in as `<job_id>/master.mov` alongs
 
 ---
 
+## 5. Master retention (pruning old masters)
+
+ProRes masters are huge; kiln can prune a master from the masters pool once it is older than
+`retention_days`, keeping the compressed upload + artifacts forever on the exports pool.
+`install.sh` installs and enables **`kiln-prune.timer`** (a daily sweep) — but the sweep
+**deletes nothing until you opt in**.
+
+**It is off by default.** To preview what would be pruned, changing nothing:
+
+```bash
+sudo -u kiln /opt/kiln/.venv/bin/kiln --config /opt/kiln/config.toml prune --dry-run
+```
+
+To actually enable pruning, set `prune_masters = true` in `/opt/kiln/config.toml` (adjust
+`retention_days` as desired), then the daily timer will delete eligible masters. Verify the
+timer:
+
+```bash
+systemctl status kiln-prune.timer --no-pager     # enabled/active
+systemctl list-timers kiln-prune.timer --no-pager # next run time
+journalctl -u kiln-prune.service --no-pager       # what the last sweep did
+```
+
+**Safety guarantees (why this won't lose data):**
+- A master is deleted **only if** the exports pool is reachable **and** that job's
+  `upload.mp4` + `result.json` (with `ok: true`) are present in `/mnt/exports/<job_id>/`.
+  If the exports pool is offline, the **entire** sweep holds and deletes nothing.
+- A job submitted with `options.keep_master: true` writes a `.keep_master` marker into its
+  masters dir and is **never** pruned, regardless of age.
+- With `prune_masters = false`, `kiln prune` reports would-prune candidates but deletes
+  nothing — identical to `--dry-run`.
+
+---
+
 ## Troubleshooting
 
 - **`kiln doctor` says a `/var/lib/kiln` path isn't writable** — re-run `sudo ./install.sh`; it fixes ownership.

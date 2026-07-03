@@ -26,6 +26,11 @@ EXPORT_ARTIFACTS = (
 )
 _MASTER_SUFFIXES = {".mov", ".mp4", ".mxf", ".mkv"}
 
+# Marker file written into a master's archive dir when job.json set options.keep_master.
+# The retention pruner treats a master dir containing this file as never-prunable. Defined
+# here (the writer) and imported by kiln.retention (the reader) so the name has one source.
+KEEP_MASTER_MARKER = ".keep_master"
+
 
 def _reachable(path: Path | None) -> bool:
     """A destination is usable iff set, creatable, and writable."""
@@ -44,6 +49,18 @@ def _master_in(folder: Path) -> Path | None:
         if p.is_file() and p.suffix.lower() in _MASTER_SUFFIXES and p.name != "upload.mp4":
             return p
     return None
+
+
+def _keep_master_requested(job_dir: Path) -> bool:
+    """Read options.keep_master from the job's job.json; False if absent/unreadable."""
+    job_file = job_dir / "job.json"
+    if not job_file.is_file():
+        return False
+    try:
+        spec = json.loads(job_file.read_text())
+    except (ValueError, OSError):
+        return False
+    return bool(spec.get("options", {}).get("keep_master", False))
 
 
 def _move_file(src: Path, dst: Path) -> None:
@@ -81,6 +98,8 @@ def archive_or_defer(job_dir: Path, config: Config) -> bool:
 
     master = _master_in(job_dir)
     artifacts = [job_dir / name for name in EXPORT_ARTIFACTS if (job_dir / name).is_file()]
+    # Read the pin now, before the job folder (with its job.json) is retired.
+    pinned = _keep_master_requested(job_dir)
 
     masters_ok = _reachable(config.masters_archive)
     exports_ok = _reachable(config.exports_archive)
@@ -90,7 +109,10 @@ def archive_or_defer(job_dir: Path, config: Config) -> bool:
     if master is not None:
         if masters_ok:
             assert config.masters_archive is not None  # narrowed by masters_ok
-            _place([master], config.masters_archive / job_id)
+            master_dest = config.masters_archive / job_id
+            _place([master], master_dest)
+            if pinned:  # persist the never-prune pin alongside the archived master
+                (master_dest / KEEP_MASTER_MARKER).write_text("")
         else:
             deferred.append("master")
 

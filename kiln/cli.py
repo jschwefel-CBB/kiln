@@ -37,6 +37,10 @@ def _build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve", help="run the service loop")
     serve.add_argument("--once", action="store_true", help="single pass then exit")
 
+    prune = sub.add_parser("prune", help="prune old archived masters (retention sweep)")
+    prune.add_argument("--dry-run", action="store_true",
+                       help="report what would be pruned, delete nothing")
+
     return parser
 
 
@@ -132,6 +136,16 @@ def _cmd_run(cfg: Config, folder: str) -> int:
     return 0
 
 
+def _cmd_prune(cfg: Config, dry_run: bool) -> int:
+    from kiln.retention import format_report, prune_masters
+
+    report = prune_masters(cfg, dry_run=dry_run)
+    print(format_report(report, cfg, dry_run=dry_run))
+    # Exit non-zero if the sweep was held because the exports pool was unreachable, so a
+    # timer/cron surfaces it; a clean run (including "nothing to do") is 0.
+    return 1 if report.skipped_exports_unreachable else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point (see ``[project.scripts]`` in pyproject.toml)."""
     args = _build_parser().parse_args(argv)
@@ -143,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_status(cfg)
     if args.command == "run":
         return _cmd_run(cfg, args.folder)
+    if args.command == "prune":
+        return _cmd_prune(cfg, args.dry_run)
     if args.command == "serve":
         import logging
 

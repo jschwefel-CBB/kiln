@@ -144,16 +144,26 @@ exist. (`keep_master` governs retention, not a step — see Master retention.)
 **Master retention (pruning):** ProRes masters are large (~220 GB/hr at 4K), so kiln
 supports pruning the archived master after a rolling window while keeping the compressed
 upload + artifacts permanently. Rules:
-- A scheduled sweep (or a step run on a timer) deletes masters whose archive age exceeds
+- **Trigger:** a `kiln prune` CLI command (with `--dry-run`) invoked by a shipped systemd
+  **timer** (daily), decoupled from the always-on service. It deletes the master directory
+  `$MASTERS_ARCHIVE/<job_id>/` when the master file's archive age (its mtime) exceeds
   `retention_days` (config; default 90).
-- **Fail-safe:** because the master and its exports live on *separate* pools, a master is
-  deleted only if `$EXPORTS_ARCHIVE` is reachable **and** the upload plus all derived
-  artifacts are confirmed present in `$EXPORTS_ARCHIVE/<job_id>/`. Never prune when the
-  exports pool is offline or any output is missing.
+- **Fail-safe (verified-complete exports):** because the master and its exports live on
+  *separate* pools, a master is deleted only if `$EXPORTS_ARCHIVE` is reachable **and** that
+  job's exports are confirmed complete in `$EXPORTS_ARCHIVE/<job_id>/`. "Complete" means
+  **`upload.mp4` and `result.json` are both present and `result.json` records `ok: true`** —
+  a job-type-agnostic anchor (optional artifacts like `captions.srt` exist only when the job
+  requested those steps, so they are not required). Never prune when the exports pool is
+  offline, the upload/result are missing, or the run did not succeed.
 - **Off by default** (`prune_masters = false` in config) so a fresh/open-source install never
-  deletes anyone's masters unexpectedly; the operator opts in explicitly.
+  deletes anyone's masters unexpectedly; the operator opts in explicitly. With it false,
+  `kiln prune` reports what it *would* do and deletes nothing.
 - **Per-video override:** `"keep_master": true` in `job.json` pins that video's master
-  permanently, exempting it from the sweep (evergreen/flagship/licensable content).
+  permanently, exempting it from the sweep (evergreen/flagship/licensable content). Because
+  the pruner runs against the storage server long after processing, the pin is **persisted
+  into the archive** at archive time: the archiver writes a small `.keep_master` marker file
+  into `$MASTERS_ARCHIVE/<job_id>/` when the job requested it. The pruner treats a master
+  directory containing `.keep_master` as never-prunable.
 
 **Outputs** (produced locally, then archived to `$EXPORTS_ARCHIVE/<job_id>/`, separate from the
 master in `$MASTERS_ARCHIVE/<job_id>/`): `upload.mp4`, `captions.srt`, `transcript.txt`,

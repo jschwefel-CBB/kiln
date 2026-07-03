@@ -1,0 +1,28 @@
+[Unit]
+Description=kiln — master retention prune (oneshot; run by kiln-prune.timer)
+After=network-online.target remote-fs.target
+Wants=network-online.target
+# If the exports NFS mount is absent the sweep holds itself (exits non-zero) rather than
+# deleting a master it cannot verify — so the mounts are nice-to-have, not required to start.
+
+[Service]
+Type=oneshot
+User=kiln
+Group=kiln
+WorkingDirectory=/opt/kiln
+# Retention sweep. Deletes nothing unless config.toml has prune_masters=true; safe to run
+# regardless (a disabled/dry sweep just reports). No --dry-run here: the config gate governs.
+ExecStart=/opt/kiln/.venv/bin/kiln --config /opt/kiln/config.toml prune
+
+# --- Hardening: tighter than the service — this job needs NO GPU, only the archive mounts.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Writes only to the masters archive (to delete); reads the exports archive (to verify).
+ReadWritePaths=/mnt/masters
+ReadOnlyPaths=/mnt/exports
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true

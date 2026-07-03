@@ -36,6 +36,41 @@ def _assembled_job(tmp_path: Path, job_id: str = "2026-07-02_v") -> Path:
     return folder
 
 
+def test_pinned_master_writes_keep_marker(tmp_path: Path) -> None:
+    """job.json with keep_master:true -> a .keep_master marker lands in the master archive
+    so the pruner (running later, against storage only) knows to never delete it."""
+    masters = tmp_path / "masters"
+    exports = tmp_path / "exports"
+    cfg = _config(tmp_path, masters, exports)
+    job = _assembled_job(tmp_path)
+    (job / "job.json").write_text(json.dumps({"job_id": job.name, "options": {"keep_master": True}}))
+
+    archive_or_defer(job, cfg)
+    assert (masters / "2026-07-02_v" / "master.mov").exists()
+    assert (masters / "2026-07-02_v" / ".keep_master").is_file()
+
+
+def test_unpinned_master_has_no_keep_marker(tmp_path: Path) -> None:
+    masters = tmp_path / "masters"
+    exports = tmp_path / "exports"
+    cfg = _config(tmp_path, masters, exports)
+    job = _assembled_job(tmp_path)
+    (job / "job.json").write_text(json.dumps({"job_id": job.name, "options": {"keep_master": False}}))
+
+    archive_or_defer(job, cfg)
+    assert (masters / "2026-07-02_v" / "master.mov").exists()
+    assert not (masters / "2026-07-02_v" / ".keep_master").exists()
+
+
+def test_missing_job_json_means_no_keep_marker(tmp_path: Path) -> None:
+    # _assembled_job writes no job.json; absence must not crash and must not pin.
+    masters = tmp_path / "masters"
+    cfg = _config(tmp_path, masters, tmp_path / "exports")
+    job = _assembled_job(tmp_path)
+    archive_or_defer(job, cfg)
+    assert not (masters / "2026-07-02_v" / ".keep_master").exists()
+
+
 def test_archive_both_destinations(tmp_path: Path) -> None:
     masters = tmp_path / "masters"
     exports = tmp_path / "exports"

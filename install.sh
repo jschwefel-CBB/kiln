@@ -32,6 +32,9 @@ STATE_BASE="/var/lib/kiln"
 SERVICE_USER="kiln"
 UNIT_SRC="packaging/kiln.service"
 UNIT_DST="/etc/systemd/system/kiln.service"
+PRUNE_SVC_SRC="packaging/kiln-prune.service"
+PRUNE_TIMER_SRC="packaging/kiln-prune.timer"
+SYSTEMD_DIR="/etc/systemd/system"
 CONFIG_DST="${INSTALL_DIR}/config.toml"
 CONFIG_SRC="packaging/config.deb005.toml"
 
@@ -64,6 +67,8 @@ check_prereqs() {
     command -v ollama  >/dev/null || warn "ollama not found (metadata step needs it)"
     command -v realesrgan-ncnn-vulkan >/dev/null || warn "realesrgan-ncnn-vulkan not found (upscale is opt-in; ok)"
     [[ -f "${UNIT_SRC}" ]]   || die "run from the repo root; ${UNIT_SRC} not found"
+    [[ -f "${PRUNE_SVC_SRC}" ]]   || die "${PRUNE_SVC_SRC} not found"
+    [[ -f "${PRUNE_TIMER_SRC}" ]] || die "${PRUNE_TIMER_SRC} not found"
     [[ -f "${CONFIG_SRC}" ]] || die "${CONFIG_SRC} not found"
     log "prerequisite check done."
 }
@@ -111,11 +116,16 @@ install_config() {
 }
 
 install_unit() {
-    log "installing systemd unit"
+    log "installing systemd units (service + prune timer)"
     $DRY install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"
+    $DRY install -m 0644 "${PRUNE_SVC_SRC}" "${SYSTEMD_DIR}/kiln-prune.service"
+    $DRY install -m 0644 "${PRUNE_TIMER_SRC}" "${SYSTEMD_DIR}/kiln-prune.timer"
     $DRY systemctl daemon-reload
     $DRY systemctl enable kiln.service
-    log "unit installed + enabled (not started; start with: systemctl start kiln)"
+    # The prune TIMER is enabled so the daily sweep is scheduled; the sweep itself deletes
+    # nothing unless config.toml sets prune_masters=true, so enabling the timer is safe.
+    $DRY systemctl enable kiln-prune.timer
+    log "units installed; kiln.service enabled (not started); kiln-prune.timer enabled"
 }
 
 install_gpu_whisper() {

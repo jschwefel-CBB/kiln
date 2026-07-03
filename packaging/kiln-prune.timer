@@ -1,0 +1,13 @@
+[Unit]
+Description=kiln — daily master retention prune
+Documentation=https://github.com/jschwefel-CBB/kiln
+
+[Timer]
+# Run once a day. Persistent=true catches up a missed run (box asleep/off) on next boot.
+OnCalendar=daily
+Persistent=true
+# Spread the start a little so it doesn't fire at exactly midnight with everything else.
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

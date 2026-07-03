@@ -11,7 +11,11 @@ state_dir   = "/var/lib/kiln/state"
 masters_archive = "/mnt/masters"
 exports_archive = "/mnt/exports"
 
-# Master pruning stays OFF until explicitly enabled.
+# Master retention. The kiln-prune.timer runs `kiln prune` daily, but it deletes nothing
+# until prune_masters=true. A master is pruned only if it is older than retention_days AND
+# its exports (upload.mp4 + result.json ok:true) are confirmed on the exports pool; a job
+# with options.keep_master=true (→ .keep_master marker) is never pruned. Preview anytime:
+# `kiln --config /opt/kiln/config.toml prune --dry-run`.
 prune_masters = false
 retention_days = 90
 
