@@ -2,11 +2,18 @@
 #
 # kiln installer — installs kiln as a systemd service on a Linux host with an NVIDIA GPU.
 #
-#   sudo ./install.sh          # install/upgrade
-#   sudo ./install.sh --check  # dry-run: validate prerequisites, mutate nothing
+#   sudo ./install.sh                 # install/upgrade
+#   sudo ./install.sh --check         # dry-run: validate prerequisites, mutate nothing
+#   sudo ./install.sh --gpu-whisper   # also install CUDA 12 cuBLAS+cuDNN for GPU transcription
 #
 # Idempotent: safe to re-run. Creates the service user if missing, (re)builds the venv,
 # (re)installs the unit.
+#
+# --gpu-whisper installs NVIDIA cuBLAS + cuDNN (CUDA 12) wheels into kiln's venv (~2.3 GB)
+# and writes a systemd drop-in putting them on LD_LIBRARY_PATH, so faster-whisper runs
+# transcription on the GPU instead of falling back to CPU. Omit it to keep the install lean
+# and let transcription run on CPU (valid on small cards or when the GPU is reserved for
+# transcode). Requires an NVIDIA GPU; combine with --check to preview.
 #
 # External-tool prerequisites (the pipeline steps shell out to these):
 #   * ffmpeg with NVENC          — transcode/normalize (and upscale reassembly).
@@ -29,7 +36,17 @@ CONFIG_DST="${INSTALL_DIR}/config.toml"
 CONFIG_SRC="packaging/config.deb005.toml"
 
 CHECK_ONLY=false
-[[ "${1:-}" == "--check" ]] && CHECK_ONLY=true
+GPU_WHISPER=false
+for arg in "$@"; do
+    case "${arg}" in
+        --check)       CHECK_ONLY=true ;;
+        --gpu-whisper) GPU_WHISPER=true ;;
+        *) echo "[kiln-install] ERROR: unknown argument: ${arg}" >&2; exit 1 ;;
+    esac
+done
+
+UNIT_DROPIN_DIR="${UNIT_DST}.d"
+CUDA_DROPIN="${UNIT_DROPIN_DIR}/10-cuda-libs.conf"
 
 log()  { echo "[kiln-install] $*"; }
 warn() { echo "[kiln-install] WARNING: $*" >&2; }
@@ -68,6 +85,10 @@ make_dirs() {
     for d in inbox scratch state; do
         $DRY install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STATE_BASE}/${d}"
     done
+    # Inbox is group-writable + setgid so a Samba drop user (in the service group) can
+    # write masters into it, and everything created there inherits the service group so
+    # the service can read it. Harmless when Samba isn't used.
+    $DRY chmod 2775 "${STATE_BASE}/inbox"
 }
 
 install_code() {
@@ -97,6 +118,34 @@ install_unit() {
     log "unit installed + enabled (not started; start with: systemctl start kiln)"
 }
 
+install_gpu_whisper() {
+    # CTranslate2 (faster-whisper's backend) needs CUDA 12 cuBLAS + cuDNN on the library
+    # path to use the GPU. Install the wheels into the venv and expose their lib dirs via a
+    # systemd drop-in. Without this, transcription silently falls back to CPU.
+    log "installing CUDA 12 cuBLAS + cuDNN into the venv (GPU Whisper; ~2.3 GB)"
+    $DRY "${INSTALL_DIR}/.venv/bin/pip" install --quiet nvidia-cublas-cu12 nvidia-cudnn-cu12
+
+    # The wheels land under .venv/lib/pythonX.Y/site-packages/nvidia/{cublas,cudnn}/lib.
+    # Compute the actual python X.Y from the venv rather than assuming a version.
+    if [[ -n "${DRY}" ]]; then
+        log "[dry-run] would write ${CUDA_DROPIN} with LD_LIBRARY_PATH for cublas+cudnn"
+        return
+    fi
+    local pyver
+    pyver="$("${INSTALL_DIR}/.venv/bin/python" -c 'import sys;print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"
+    local libbase="${INSTALL_DIR}/.venv/lib/${pyver}/site-packages/nvidia"
+    local ldpath="${libbase}/cublas/lib:${libbase}/cudnn/lib"
+    install -d "${UNIT_DROPIN_DIR}"
+    cat > "${CUDA_DROPIN}" <<EOF
+# faster-whisper (CTranslate2) needs CUDA 12 cuBLAS + cuDNN on the library path.
+# Installed into kiln's venv by install.sh --gpu-whisper. Regenerated on each such run.
+[Service]
+Environment=LD_LIBRARY_PATH=${ldpath}
+EOF
+    log "wrote ${CUDA_DROPIN}"
+    systemctl daemon-reload
+}
+
 run_doctor() {
     log "running kiln doctor"
     $DRY su -s /bin/bash "${SERVICE_USER}" -c "${INSTALL_DIR}/.venv/bin/kiln --config ${CONFIG_DST} doctor" || \
@@ -108,7 +157,9 @@ main() {
         DRY="echo [dry-run]"
         log "=== --check (dry-run): no changes will be made ==="
         check_prereqs
-        create_user; make_dirs; install_code; install_config; install_unit; run_doctor
+        create_user; make_dirs; install_code; install_config; install_unit
+        $GPU_WHISPER && install_gpu_whisper
+        run_doctor
         log "=== dry-run complete ==="
         exit 0
     fi
@@ -120,6 +171,7 @@ main() {
     install_code
     install_config
     install_unit
+    $GPU_WHISPER && install_gpu_whisper
     run_doctor
     log "done. Start the service with:  sudo systemctl start kiln"
 }

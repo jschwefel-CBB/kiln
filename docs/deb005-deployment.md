@@ -97,30 +97,42 @@ sudo rm -rf /mnt/masters/smoketest /mnt/exports/smoketest
 
 ## 3. Enable GPU Whisper (CUDA 12 cuBLAS + cuDNN)
 
-By default faster-whisper transcription **falls back to CPU** on deb005 because the box
-has only Ollama's private cuBLAS (CUDA 13) — CTranslate2 (faster-whisper's backend) needs
-**CUDA 12** cuBLAS + cuDNN, which aren't on the library path. Transcode/metadata already
-use the GPU; this only affects transcription speed.
+By default faster-whisper transcription **falls back to CPU** because CTranslate2
+(faster-whisper's backend) needs **CUDA 12** cuBLAS + cuDNN on the library path, and a
+stock box often has only the driver's / Ollama's private CUDA runtime. Transcode and
+metadata already use the GPU; this only affects transcription speed.
 
-Simplest fix — install the CUDA 12 libraries into kiln's venv:
+**Recommended — let the installer do it.** Re-run the install with `--gpu-whisper`; it
+installs the CUDA 12 wheels into the venv (~2.3 GB) and writes the `LD_LIBRARY_PATH`
+drop-in for you:
 
 ```bash
-sudo /opt/kiln/.venv/bin/pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+sudo ./install.sh --gpu-whisper
+sudo systemctl restart kiln
 ```
 
-Then make them discoverable to the service. The wheels land under
-`/opt/kiln/.venv/lib/python3.*/site-packages/nvidia/*/lib`. Add an
-`Environment=LD_LIBRARY_PATH=...` line to the unit (a drop-in keeps the packaged unit
-clean):
+That is idempotent and safe to run over an existing install — it adds the libraries and
+the drop-in without disturbing the rest.
+
+<details>
+<summary>What that does by hand (for reference)</summary>
 
 ```bash
-sudo systemctl edit kiln
-# in the editor, add (adjust the python3.x version to match the venv):
-#   [Service]
-#   Environment=LD_LIBRARY_PATH=/opt/kiln/.venv/lib/python3.13/site-packages/nvidia/cublas/lib:/opt/kiln/.venv/lib/python3.13/site-packages/nvidia/cudnn/lib
+# 1. Install the CUDA 12 backends into kiln's venv.
+sudo /opt/kiln/.venv/bin/pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+
+# 2. Expose them to the service. The wheels land under
+#    /opt/kiln/.venv/lib/python3.X/site-packages/nvidia/{cublas,cudnn}/lib.
+#    Write a drop-in (keeps the packaged unit clean); match python3.X to the venv:
+sudo install -d /etc/systemd/system/kiln.service.d
+sudo tee /etc/systemd/system/kiln.service.d/10-cuda-libs.conf >/dev/null <<'EOF'
+[Service]
+Environment=LD_LIBRARY_PATH=/opt/kiln/.venv/lib/python3.13/site-packages/nvidia/cublas/lib:/opt/kiln/.venv/lib/python3.13/site-packages/nvidia/cudnn/lib
+EOF
 sudo systemctl daemon-reload
 sudo systemctl restart kiln
 ```
+</details>
 
 Verify: run a job that requests captions/transcribe and watch `nvidia-smi` during the
 run — the kiln process should appear, and the transcribe step's log message reports
@@ -131,32 +143,44 @@ run — the kiln process should appear, and the transcribe step's log message re
 ## 4. Samba: export `$INBOX` so the Mac can drop masters
 
 The Mac drops FCP-exported masters into deb005's `$INBOX` over SMB (deb005 is the SMB
-server for this hop; ark is unrelated to it). **Guest access is off** — use a real user,
-same policy as ark.
+server for this hop; ark is unrelated to it). **Guest access is off** — the Mac
+authenticates as a **dedicated, single-purpose drop user** (`kilndrop`), not a personal
+login and not the `kiln` service account. That user exists only to own the SMB drop,
+matching a strict credential-isolation posture.
+
+The installer already makes the inbox group-writable + setgid (`chmod 2775`), so a member
+of the `kiln` group can write it and everything created inherits group `kiln` (which the
+service reads). You only need to create the drop user and give it an SMB password.
 
 ```bash
-# 1. Install Samba.
-sudo apt update && sudo apt install -y samba
+# 1. Install Samba (server) + smbclient (for the verification step below).
+sudo apt update && sudo apt install -y samba smbclient
 
 # 2. Add the share. Append packaging/smb-kiln-inbox.conf to the main config:
 sudo tee -a /etc/samba/smb.conf < packaging/smb-kiln-inbox.conf
 
-# 3. Give a real system user an SMB password (the user must exist and be able to write
-#    /var/lib/kiln/inbox — put it in the kiln group). Replace <user>:
-sudo usermod -aG kiln <user>
-sudo smbpasswd -a <user>
+# 3. Create the dedicated drop user: no login shell, in the kiln group so it can write
+#    the inbox. The stanza's `valid users = @kiln` then authorizes it.
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin -g kiln kilndrop
 
-# 4. Validate the config and restart.
+# 4. Give it an SMB password (interactive — the password never lands in a script or repo).
+sudo smbpasswd -a kilndrop
+
+# 5. Validate the config and restart.
 testparm                       # should parse with no errors; shows [kiln-inbox]
 sudo systemctl restart smbd
 sudo systemctl enable smbd
 
-# 5. Confirm the share is offered.
-smbclient -L localhost -U <user>     # enter the SMB password; expect kiln-inbox listed
+# 6. Confirm the share is offered and the drop user can actually write it.
+smbclient -L localhost -N | grep kiln-inbox        # share is listed
+echo test > /tmp/smbtest.txt
+smbclient //localhost/kiln-inbox -U kilndrop \
+  -c 'put /tmp/smbtest.txt smbtest.txt; ls; del smbtest.txt'   # authenticated write round-trips
+rm -f /tmp/smbtest.txt
 ```
 
 **On the Mac:** Finder → **Go → Connect to Server** (⌘K) → `smb://deb005/kiln-inbox`
-(or `smb://<deb005-ip>/kiln-inbox`) → **Registered User** with `<user>` + the SMB
+(or `smb://<deb005-ip>/kiln-inbox`) → **Registered User** with `kilndrop` + the SMB
 password. **Not** guest. Export/copy a master in as `<job_id>/master.mov` alongside a
 `job.json`; the running kiln service picks it up and archives it to ark.
 

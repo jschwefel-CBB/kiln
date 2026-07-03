@@ -15,7 +15,7 @@ exports_archive = "/mnt/exports"
 prune_masters = false
 retention_days = 90
 
-whisper_model = "auto"       # large-v3 on the A4000's VRAM (needs CUDA cuBLAS/cuDNN for GPU)
+whisper_model = "auto"       # large-v3 on the A4000's VRAM (GPU needs install.sh --gpu-whisper)
 llm_model = "llama3.1:8b"    # pulled on deb005
 codec = "auto"               # HEVC 4K / H.264 <=1080p; A4000 = no AV1
 target_lufs = -14

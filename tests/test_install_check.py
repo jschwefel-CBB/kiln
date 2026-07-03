@@ -38,3 +38,19 @@ def test_install_creates_expected_layout() -> None:
     text = _INSTALL.read_text()
     for token in ("/opt/kiln", "/var/lib/kiln", "useradd", ".venv", "kiln.service"):
         assert token in text, f"install.sh missing reference to {token}"
+
+
+def test_install_makes_inbox_group_writable_setgid() -> None:
+    # A Samba drop user (in the service group) must be able to write the inbox, and drops
+    # must inherit the service group so the service can read them → setgid + group-write.
+    text = _INSTALL.read_text()
+    assert "chmod 2775" in text and "inbox" in text, "install.sh must setgid+group-write the inbox"
+
+
+def test_install_gpu_whisper_flag_installs_cuda_libs() -> None:
+    text = _INSTALL.read_text()
+    assert "--gpu-whisper" in text, "install.sh must support --gpu-whisper"
+    # Installs the CUDA 12 backends CTranslate2 needs...
+    assert "nvidia-cublas-cu12" in text and "nvidia-cudnn-cu12" in text
+    # ...and exposes them to the service via an LD_LIBRARY_PATH drop-in.
+    assert "LD_LIBRARY_PATH" in text and "10-cuda-libs.conf" in text
