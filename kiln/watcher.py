@@ -39,7 +39,10 @@ def scan_once(inbox: Path, queue: ProcessingQueue, min_age_seconds: float = 2.0)
     enqueued: list[str] = []
     if not inbox.is_dir():
         return enqueued
-    for folder in sorted(p for p in inbox.iterdir() if p.is_dir()):
+    # Skip dot-prefixed folders: they are staging/hidden areas (the Mac helper stages a job
+    # in <inbox>/.staging/<job_id>/ then atomically renames it into place). Never enqueue a
+    # dotfolder, even if it momentarily looks complete and stable.
+    for folder in sorted(p for p in inbox.iterdir() if p.is_dir() and not p.name.startswith(".")):
         if is_stable(folder, min_age_seconds):
             job = queue.enqueue(folder)
             enqueued.append(job.job_id)

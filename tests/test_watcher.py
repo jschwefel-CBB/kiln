@@ -57,6 +57,22 @@ def test_scan_once_enqueues_stable_folder(tmp_path: Path) -> None:
     assert not folder.exists()  # moved out of inbox
 
 
+def test_scan_once_ignores_dot_prefixed_folders(tmp_path: Path) -> None:
+    """A dot-prefixed folder is a staging/hidden area (the Mac helper stages into
+    <inbox>/.staging/<job_id>/ then atomically renames). Even when it looks complete and
+    stable, the watcher must never enqueue it — otherwise a mid-copy staging dir that goes
+    quiet for the stability window would be picked up incomplete."""
+    inbox = tmp_path / "inbox"
+    staging = _drop(inbox, ".staging")          # dot-prefixed, complete + stable
+    old = time.time() - 10
+    for p in staging.iterdir():
+        os.utime(p, (old, old))
+    q = ProcessingQueue(tmp_path / "state")
+    enqueued = scan_once(inbox, q, min_age_seconds=2.0)
+    assert enqueued == []                        # not enqueued
+    assert staging.exists()                       # left untouched in the inbox
+
+
 def test_submit_endpoint_triggers_scan(tmp_path: Path) -> None:
     inbox = tmp_path / "inbox"
     folder = _drop(inbox, "job-b")
