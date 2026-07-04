@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.kiln.mount-inbox — remount the kiln SMB inbox at login and on network change.
+
+  Runs mount-inbox.sh, which is idempotent and pulls the SMB password from the login
+  Keychain. NO secret lives in this plist.
+
+  __MOUNT_SCRIPT__ is replaced with the absolute path to mount-inbox.sh by
+  install-mount-agent.sh at install time (LaunchAgents can't use $HOME/~).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kiln.mount-inbox</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__MOUNT_SCRIPT__</string>
+  </array>
+
+  <!-- Mount as soon as the agent loads (login). -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Re-run when the network configuration changes (e.g. wired link comes up after wake),
+       so the mount self-heals without waiting for the next login. -->
+  <key>WatchPaths</key>
+  <array>
+    <string>/Library/Preferences/SystemConfiguration/NetworkInterfaces.plist</string>
+    <string>/etc/resolv.conf</string>
+  </array>
+
+  <!-- Don't hammer: throttle re-invocations to at most once per 30s. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- One-shot each time it fires; not a long-running daemon. -->
+  <key>KeepAlive</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/com.kiln.mount-inbox.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/com.kiln.mount-inbox.err</string>
+</dict>
+</plist>
