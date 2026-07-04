@@ -23,6 +23,9 @@
 //        [--whisper-model NAME] [--llm-model NAME] [--keep-master true|false]
 
 ObjC.import('Foundation');
+// JXA has no built-in exit; bind libc exit(3) so die() can set a specific status code.
+// (`$.exit` does not exist on the ObjC bridge — calling it throws a TypeError.)
+ObjC.bindFunction('exit', ['void', ['int']]);
 
 // --- presets: each sets the `jobs` toggles (see spec §4) ---
 var PRESETS = {
@@ -127,8 +130,11 @@ function renameDir(src, dst) {
 }
 
 function mkdirs(path) {
+  // attributes: must be a real nil ($()), NOT JS null — JXA marshals `null` into an
+  // NSNull, and createDirectory then calls -count on it -> "-[NSNull count]: unrecognized
+  // selector". (The trailing error: out-param tolerates null; the attributes: input does not.)
   return $.NSFileManager.defaultManager
-    .createDirectoryAtPathWithIntermediateDirectoriesAttributesError(path, true, null, null);
+    .createDirectoryAtPathWithIntermediateDirectoriesAttributesError(path, true, $(), null);
 }
 
 function ping(submitUrl) {
