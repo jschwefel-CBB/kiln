@@ -18,7 +18,7 @@ bound work. kiln moves all of that to an idle **RTX A4000 Linux box named `deb00
 does GPU transcoding plus AI captioning/transcript/chapters/metadata, then archives
 everything to a storage server. The Mac's only job is to **hand the master to `deb005`**.
 
-You are building the **Mac-side handoff**: a small Python helper (`kiln-submit`) plus the
+You are building the **Mac-side handoff**: a small JXA helper (`kiln-submit.js`) plus the
 Final Cut Pro integration that invokes it automatically when you finish an export. That's
 it. No processing happens on the Mac.
 
@@ -98,41 +98,53 @@ server. The Mac never sees these; they do not come back.
 
 ---
 
-## 3. `kiln-submit` — the Python helper
+## 3. `kiln-submit` — the JXA helper
 
-**Language:** Python 3 (present on macOS; use only the standard library — `argparse`, `json`,
-`pathlib`, `shutil`, `urllib.request`, `datetime`, `re`). No third-party dependencies, no
-pip install.
+**Language:** **JXA (JavaScript for Automation), run by `osascript`.** Chosen over Python
+because `osascript` is **always present on macOS** (Apple's built-in automation runtime),
+whereas the system `python3` is an Xcode Command Line Tools stub that prompts to install on a
+clean Mac. JXA is JavaScript, so JSON is native; file operations use the Objective-C bridge
+(`$.NSFileManager`, `$.NSData`). It is plain text, so it lives in the kiln repo (`mac/kiln-submit.js`)
+and is pulled to the Mac like the rest of the project, and it slots directly into Compressor's
+"Run Automator Workflow" job action (§7).
 
-**Install location:** `~/bin/kiln-submit` (chmod +x, shebang `#!/usr/bin/env python3`).
+**Install location:** `mac/kiln-submit.js` in the repo, copied to (e.g.) `~/bin/kiln-submit.js`
+on the Mac. Invoked as `osascript ~/bin/kiln-submit.js <args…>`.
 
 **What it does:**
-1. Take a master file path + a preset (or explicit flags).
+1. Take a master file path + a preset (and optional overrides) as `osascript` arguments.
 2. Derive a `job_id` (from `--job-id`, else `YYYY-MM-DD_<sanitized-basename>`).
-3. Build `job.json` from the preset/flags.
+3. Build `job.json` from the preset/overrides.
 4. **Atomically drop** the master + `job.json` into the mounted inbox share (§5).
-5. (Optional) POST to deb005's submit endpoint for instant pickup (§6).
-6. Print the `job_id` and the destination path; exit non-zero on any error.
+5. (Optional) fire the deb005 submit endpoint for instant pickup (§6).
+6. Print the `job_id` and the destination path to stdout; exit non-zero on any error.
 
-### 3.1 CLI
+### 3.1 Invocation
+
+`osascript` passes everything after the script path as string arguments (available via
+`run(argv)` in JXA). The argument grammar mirrors a CLI:
 
 ```
-kiln-submit MASTER [--preset NAME] [--job-id ID] [--title TITLE]
-                   [--inbox PATH] [--submit-url URL]
-                   [--transcode/--no-transcode] [--captions/--no-captions]
-                   [--normalize/--no-normalize] [--chapters/--no-chapters]
-                   [--metadata/--no-metadata] [--upscale/--no-upscale]
-                   [--codec auto|hevc|h264] [--target-lufs N]
-                   [--whisper-model auto|small|medium|large-v3] [--llm-model NAME]
-                   [--keep-master] [--dry-run]
+osascript kiln-submit.js MASTER [--preset NAME] [--job-id ID] [--title TITLE]
+                                [--inbox PATH] [--submit-url URL]
+                                [--transcode true|false] [--captions true|false]
+                                [--normalize true|false] [--chapters true|false]
+                                [--metadata true|false] [--upscale true|false]
+                                [--codec auto|hevc|h264] [--target-lufs N]
+                                [--whisper-model auto|small|medium|large-v3] [--llm-model NAME]
+                                [--keep-master true|false] [--dry-run]
 ```
 
-- `MASTER` — path to the exported master. Required.
+- `MASTER` — path to the exported master (Compressor passes this). Required, first positional.
 - `--preset` — one of the names in §4. A preset sets the `jobs` toggles; explicit
-  `--*/--no-*` flags override individual toggles after the preset is applied.
+  `--<step> true|false` flags override individual toggles after the preset is applied.
 - `--inbox` — the mounted inbox path (default from config, §3.3).
 - `--submit-url` — deb005 submit endpoint (default from config; empty string disables ping).
 - `--dry-run` — build and print the `job.json` and intended destination, write nothing.
+
+> Note: JXA has no argparse; the script parses `argv` itself with a tiny loop (positional
+> first, then `--key value` pairs, with `--dry-run` and bare `--keep-master` treated as
+> boolean flags). Keep the parser permissive but validate required inputs.
 
 **Precedence:** built-in preset defaults → `--preset` → individual flags → config-file
 defaults for `--inbox`/`--submit-url`. Fail with a clear message (exit 2) if `MASTER`
@@ -141,22 +153,28 @@ path is not currently mounted/writable.
 
 ### 3.2 job_id derivation and sanitization
 
-- If `--job-id` given, sanitize it; else `job_id = f"{YYYY-MM-DD}_{slug(MASTER stem)}"`.
+- If `--job-id` given, sanitize it; else `job_id = "<YYYY-MM-DD>_" + slug(basename-without-ext)`.
 - `slug(x)`: lowercase, spaces→`-`, strip anything not `[a-z0-9._-]`, collapse repeats,
   trim leading/trailing `-._`, cap length ~60. If the result is empty, exit 2 with a message.
 - **No spaces ever** in `job_id` or any file/folder name kiln creates.
 
-### 3.3 Config file (optional, keeps flags short)
+### 3.3 Config file (optional, keeps invocations short)
 
-`~/.config/kiln/submit.toml` (parse with `tomllib`, stdlib in Python 3.11+):
+`~/.config/kiln/submit.json` — **JSON**, read natively by JXA (no TOML parser needed):
 
-```toml
-inbox = "/Volumes/kiln-inbox"          # where the deb005 inbox SMB share is mounted
-submit_url = "http://deb005:8765/submit" # empty "" to disable the instant-trigger ping
-default_preset = "standard"
+```json
+{
+  "inbox": "/Volumes/kiln-inbox",
+  "submit_url": "http://deb005:8765/submit",
+  "default_preset": "standard"
+}
 ```
 
-If the file is absent, `--inbox` is required and `--submit-url` defaults to empty (ping off).
+- `inbox` — where the deb005 inbox SMB share is mounted.
+- `submit_url` — instant-trigger endpoint; `""` (or omit) to disable the ping.
+- `default_preset` — used when no `--preset` is given.
+
+If the file is absent, `--inbox` is required and the ping defaults to off.
 
 ---
 
@@ -207,12 +225,16 @@ then rename both to their final names master-first, `job.json` **last** (deb005 
 deb005 runs a tiny HTTP endpoint that, on `POST /submit`, tells kiln to scan the inbox
 **now** instead of waiting for its next 2-second poll. From the Mac:
 
-```python
-import urllib.request
-try:
-    urllib.request.urlopen(urllib.request.Request(submit_url, method="POST"), timeout=3)
-except Exception:
-    pass  # best-effort: if the ping fails, deb005 still picks the job up within ~2s
+The simplest, dependency-free way from JXA is to shell out to `curl` (always present) via
+`Application('System Events')` / `doShellScript`, best-effort:
+
+```javascript
+// best-effort ping; never throw. curl returns quickly with -m (max time).
+try {
+  const app = Application.currentApplication();
+  app.includeStandardAdditions = true;
+  app.doShellScript(`curl -s -m 3 -X POST ${JSON.stringify(submitUrl)} >/dev/null 2>&1 || true`);
+} catch (e) { /* ignore: deb005 still picks the job up within ~2s via its poll */ }
 ```
 
 The ping carries **no payload and no path** — it only says "look now." The job is already in
@@ -236,10 +258,11 @@ automation surface and passes the output file path to the workflow.
 ### 7.1 One-time setup
 
 1. **Create an Automator "Quick Action"/workflow** (`kiln-handoff.workflow`) containing a
-   single **"Run Shell Script"** step, input = "as arguments":
+   single **"Run Shell Script"** step, input = "as arguments". The shell step simply runs the
+   JXA helper via `osascript` (no Python; `osascript` is always present):
    ```bash
-   # $1 is the path Compressor passes (the exported master)
-   /Users/<you>/bin/kiln-submit "$1" --preset standard
+   # "$1" is the path Compressor passes (the exported master)
+   /usr/bin/osascript "$HOME/bin/kiln-submit.js" "$1" --preset standard
    ```
    (Create one workflow per preset, or read the preset from the output filename — start with
    one per preset; it's the simplest and most predictable.)
@@ -275,7 +298,7 @@ Documented for completeness; use only if you don't want Compressor in the loop:
 - In FCP, add a Share Destination **"Export File"** that writes the master to a **staging
   folder** (NOT the inbox directly).
 - Attach a macOS **Folder Action** (`Automator` → Folder Action bound to that staging folder)
-  running `kiln-submit "$1" --preset standard`.
+  running `/usr/bin/osascript "$HOME/bin/kiln-submit.js" "$1" --preset standard`.
 - **Caveat:** Folder Actions can fire while a large ProRes file is still being written. To be
   safe, `kiln-submit` already stages+atomic-renames (§5), but the Folder Action itself may
   trigger on the partial file — add a settle check in the shell step (wait until the file
@@ -314,7 +337,7 @@ identical either way.
 
 Build is complete when:
 
-1. **`kiln-submit --dry-run`** on a sample `.mov` prints a valid `job.json` with the right
+1. **`osascript kiln-submit.js SAMPLE.mov --dry-run`** prints a valid `job.json` with the right
    preset toggles and a sanitized `YYYY-MM-DD_slug` `job_id`, writing nothing.
 2. **Real submit** of a small `.mov` atomically creates `<inbox>/<job_id>/` containing the
    master + `job.json`, with no partial-file window (verify by watching the inbox during a
@@ -326,7 +349,8 @@ Build is complete when:
    with the corresponding `jobs` toggles, verified by reading the archived `result.json`.
 5. **Compressor does not re-encode** — the archived master byte-matches (or is ProRes-
    equivalent to) the FCP export; deb005's transcode step is what produced `upload.mp4`.
-6. **No spaces** in any filename/foldername kiln creates; no third-party Python deps; no
+6. **No spaces** in any filename/foldername kiln creates; no runtime install needed (JXA via
+   the always-present `osascript`, no Python/Homebrew dependency); no
    secrets in the helper or config committed to any repo.
 
 ---
