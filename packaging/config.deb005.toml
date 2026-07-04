@@ -32,6 +32,10 @@ chapters  = true
 metadata  = true
 upscale   = false            # opt-in; needs realesrgan-ncnn-vulkan
 
+# Instant-trigger ping endpoint. Default 127.0.0.1 = localhost-only (safe default). To let
+# the Mac helper POST /submit for instant pickup, set host = "0.0.0.0" (all interfaces —
+# portable, not tied to any IP) and restart. The endpoint takes no payload; it only makes
+# kiln scan its inbox now instead of within ~2s. The live deb005 box uses "0.0.0.0".
 [submit]
 host = "127.0.0.1"
 port = 8765
