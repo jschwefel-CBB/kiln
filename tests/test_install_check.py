@@ -36,7 +36,9 @@ def test_install_has_check_mode() -> None:
 
 def test_install_creates_expected_layout() -> None:
     text = _INSTALL.read_text()
-    for token in ("/opt/kiln", "/var/lib/kiln", "useradd", ".venv", "kiln.service"):
+    # inbox/scratch/state base: /var/content/kiln on deb005 (the 980 PRO), overridable via
+    # STATE_BASE. All three share one filesystem (watcher os.renames inbox -> state/queued).
+    for token in ("/opt/kiln", "/var/content/kiln", "useradd", ".venv", "kiln.service"):
         assert token in text, f"install.sh missing reference to {token}"
 
 

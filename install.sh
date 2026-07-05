@@ -28,7 +28,11 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/kiln"
-STATE_BASE="/var/lib/kiln"
+# inbox/scratch/state base. Kept on /var/content (the 980 PRO, large + near-empty) so big
+# master drops and transcode scratch stay off the smaller boot fs. All three MUST share one
+# filesystem (the watcher os.rename's job folders inbox -> state/queued, which can't cross
+# filesystems). Override with STATE_BASE=... ./install.sh on other hosts if needed.
+STATE_BASE="${STATE_BASE:-/var/content/kiln}"
 SERVICE_USER="kiln"
 UNIT_SRC="packaging/kiln.service"
 UNIT_DST="/etc/systemd/system/kiln.service"
@@ -118,6 +122,8 @@ install_config() {
 install_unit() {
     log "installing systemd units (service + prune timer)"
     $DRY install -m 0644 "${UNIT_SRC}" "${UNIT_DST}"
+    # Keep the sandbox's ReadWritePaths base in sync with STATE_BASE (default /var/content/kiln).
+    $DRY sed -i "s#^ReadWritePaths=[^ ]*#ReadWritePaths=${STATE_BASE}#" "${UNIT_DST}"
     $DRY install -m 0644 "${PRUNE_SVC_SRC}" "${SYSTEMD_DIR}/kiln-prune.service"
     $DRY install -m 0644 "${PRUNE_TIMER_SRC}" "${SYSTEMD_DIR}/kiln-prune.timer"
     $DRY systemctl daemon-reload
