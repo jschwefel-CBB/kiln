@@ -105,8 +105,8 @@ because `osascript` is **always present on macOS** (Apple's built-in automation 
 whereas the system `python3` is an Xcode Command Line Tools stub that prompts to install on a
 clean Mac. JXA is JavaScript, so JSON is native; file operations use the Objective-C bridge
 (`$.NSFileManager`, `$.NSData`). It is plain text, so it lives in the kiln repo (`mac/kiln-submit.js`)
-and is pulled to the Mac like the rest of the project, and it slots directly into Compressor's
-"Run Automator Workflow" job action (§7).
+and is pulled to the Mac like the rest of the project, and it slots directly into the
+Folder Action's "Run Shell Script" step (§7).
 
 **Install location:** `mac/kiln-submit.js` in the repo, copied to (e.g.) `~/bin/kiln-submit.js`
 on the Mac. Invoked as `osascript ~/bin/kiln-submit.js <args…>`.
@@ -135,7 +135,7 @@ osascript kiln-submit.js MASTER [--preset NAME] [--job-id ID] [--title TITLE]
                                 [--keep-master true|false] [--dry-run]
 ```
 
-- `MASTER` — path to the exported master (Compressor passes this). Required, first positional.
+- `MASTER` — path to the exported master (the Folder Action passes this). Required, first positional.
 - `--preset` — one of the names in §4. A preset sets the `jobs` toggles; explicit
   `--<step> true|false` flags override individual toggles after the preset is applied.
 - `--inbox` — the mounted inbox path (default from config, §3.3).
@@ -247,63 +247,95 @@ Mac until deb005 is reconfigured to listen on the LAN — see §8.** Until then,
 
 ---
 
-## 7. Final Cut Pro integration (Compressor primary)
+## 7. Final Cut Pro integration (Export File → Folder Action primary)
 
-**Chosen mechanism: a Compressor "Run Automator Workflow" job action.** You already have
-Compressor as part of **Apple Creator Studio** (no extra cost). Compressor is preferred over
-a Folder Action because its post-transcode action runs **only after the export file is fully
-written**, eliminating the partial-file race at the source; it is Apple's supported
-automation surface and passes the output file path to the workflow.
+**Chosen mechanism: an FCP "Export File" Share Destination → staging folder → macOS Folder
+Action → `kiln-submit`.** FCP writes its exact ProRes master with **no re-encode**, a Folder
+Action bound to the staging folder fires when the file lands, and its shell step hands the
+master's path to `kiln-submit`, which atomically drops the job into the inbox.
+
+**Why not Compressor (rejected — see §7.4).** The original design named a Compressor "Run
+Automator Workflow" job action as primary, on the assumption that Compressor could be set to
+**pass the ProRes through without re-encoding**. Verified on the physical Mac (M4 mini): the
+Compressor shipped in **Apple Creator Studio** (com.apple.CompressorApp v5.3, sandboxed) has
+**no copy/passthrough setting** — every ProRes setting **re-encodes** to ProRes. That directly
+violates the non-negotiable "Compressor must not re-encode; hand off the master untouched"
+requirement (§7.1 step 2 of the old design; acceptance §5). A ProRes→ProRes re-encode wastes
+Mac time, adds an encode generation, and produces a master that is *not* the FCP export. So
+Compressor is dropped from the loop and the Export-File/Folder-Action path — which literally
+produces FCP's untouched master — is primary.
 
 ### 7.1 One-time setup
 
-1. **Create an Automator "Quick Action"/workflow** (`kiln-handoff.workflow`) containing a
-   single **"Run Shell Script"** step, input = "as arguments". The shell step simply runs the
-   JXA helper via `osascript` (no Python; `osascript` is always present):
+1. **Create the staging folders** — one per preset, so each Folder Action can hardcode its
+   `--preset` and there is no filename-parsing fragility. No spaces in any path:
    ```bash
-   # "$1" is the path Compressor passes (the exported master)
-   /usr/bin/osascript "$HOME/bin/kiln-submit.js" "$1" --preset standard
+   mkdir -p "$HOME/kiln-staging/standard" "$HOME/kiln-staging/4k" \
+            "$HOME/kiln-staging/upscale" "$HOME/kiln-staging/transcode-only"
    ```
-   (Create one workflow per preset, or read the preset from the output filename — start with
-   one per preset; it's the simplest and most predictable.)
+   These are **staging** folders, NOT the inbox. FCP exports here; the Folder Action then calls
+   `kiln-submit`, which stages+atomic-renames into the mounted inbox (`/Volumes/kiln-inbox`).
 
-2. **In Compressor, build a ProRes PASS-THROUGH / copy setting** — **critical:** Compressor
-   must **not** re-encode. kiln exists precisely so deb005 does the GPU transcode; the Mac
-   must hand off the ProRes master untouched. Use a ProRes setting that matches the source
-   (or a "copy"/passthrough), so Compressor's output is effectively the master.
+2. **Attach a Folder Action to each staging folder.** For each preset folder, bind an
+   `Automator` **Folder Action** whose single **"Run Shell Script"** step (shell `/bin/bash`,
+   pass input **"as arguments"**) runs the settle-check-then-submit below. Change only the
+   `--preset` value per folder (`standard`, `4k`, `upscale`, `transcode-only`):
+   ```bash
+   # Folder Actions can fire while a large ProRes master is still being written. Wait until the
+   # file size is stable for 3 consecutive seconds before handing off, so kiln-submit never
+   # stages a partial file. (kiln-submit's own stage+atomic-rename protects deb005 from ever
+   # SEEING a half-copied job; this guard protects the Mac side from starting on a partial one.)
+   for f in "$@"; do
+     case "$f" in */.*) continue;; esac          # ignore dotfiles/temp
+     last=-1
+     while :; do
+       cur=$(/usr/bin/stat -f%z "$f" 2>/dev/null) || break
+       [ "$cur" = "$last" ] && [ "$cur" -gt 0 ] && break
+       last=$cur
+       /bin/sleep 3
+     done
+     /usr/bin/osascript "$HOME/bin/kiln-submit.js" "$f" --preset standard
+   done
+   ```
+   (The `--preset standard` on the last line is what changes per folder.) The size-settle loop
+   is mandatory — it is the Folder-Action equivalent of Compressor's "run only after the export
+   is fully written" guarantee.
 
-3. **Attach the job action:** in that Compressor setting (or job), add job action **"Run
-   Automator Workflow"** → select `kiln-handoff.workflow`. Compressor runs it after the
-   (pass-through) transcode, handing the file path to `kiln-submit`.
-
-4. **Save the Compressor setting**, then in **Final Cut Pro** add a **Compressor Presets
-   destination** pointing at it: **File → Share → Add Destination**, double-click the
-   **Compressor Settings** icon, and choose your saved preset. (Compressor must be installed —
-   it is, via Creator Studio.) Name the destinations to match presets: **"kiln — Standard"**,
-   **"kiln — 4K"**, **"kiln — Upscale"**, **"kiln — Transcode-only"** (each tied to a
-   Compressor setting whose Automator step passes the matching `--preset`). Ref:
-   <https://support.apple.com/guide/final-cut-pro/compressor-presets-destination-ver74e31fd6c/mac>.
+3. **Add one FCP "Export File" Share Destination per preset.** In **Final Cut Pro → File →
+   Share → Add Destination**, double-click **Export File**, and set its output folder to the
+   matching staging folder from step 1. Name the destinations to match presets: **"kiln —
+   Standard"**, **"kiln — 4K"**, **"kiln — Upscale"**, **"kiln — Transcode-only"**. Set each to
+   export a **ProRes** master (matching the source — this is FCP's own export, no re-encode
+   beyond FCP's normal master render). Ref:
+   <https://support.apple.com/guide/final-cut-pro/add-destinations-ver2b3f4c9d7/mac>.
 
 ### 7.2 Daily use
 
-In Final Cut Pro: **File → Share → "kiln — Standard"** (or the preset you want). FCP sends
-the timeline to Compressor, Compressor passes the ProRes through and fires the Automator
-workflow, which runs `kiln-submit`, which atomically drops the job into the inbox. deb005
-takes it from there. **Picking the Share Destination IS choosing the job.**
+In Final Cut Pro: **File → Share → "kiln — Standard"** (or the preset you want). FCP exports
+the ProRes master into that preset's staging folder; the Folder Action waits for the file to
+settle, then runs `kiln-submit`, which atomically drops the job into the inbox. deb005 takes
+it from there. **Picking the Share Destination IS choosing the job.**
 
-### 7.3 Alternative (free, no Compressor): Folder Action
+### 7.3 The atomic-drop chain (why no partial file is ever processed)
 
-Documented for completeness; use only if you don't want Compressor in the loop:
+Two independent guards, either of which is sufficient, applied in series:
 
-- In FCP, add a Share Destination **"Export File"** that writes the master to a **staging
-  folder** (NOT the inbox directly).
-- Attach a macOS **Folder Action** (`Automator` → Folder Action bound to that staging folder)
-  running `/usr/bin/osascript "$HOME/bin/kiln-submit.js" "$1" --preset standard`.
-- **Caveat:** Folder Actions can fire while a large ProRes file is still being written. To be
-  safe, `kiln-submit` already stages+atomic-renames (§5), but the Folder Action itself may
-  trigger on the partial file — add a settle check in the shell step (wait until the file
-  size is stable for 3 seconds before calling `kiln-submit`). Compressor avoids this entirely,
-  which is why it's primary.
+1. **Mac Folder Action** waits until the export file's size is stable for 3 s before calling
+   `kiln-submit` (§7.1 step 2) — so the helper never starts on a partial file.
+2. **`kiln-submit`** stages the master under `<inbox>/.staging/<job_id>/` and **atomic-renames**
+   the finished job folder into place (§5) — so deb005 never *sees* a half-assembled job.
+3. **deb005** additionally treats a job as ready only when nothing in the folder has changed for
+   2 s (§2) — a third backstop.
+
+### 7.4 Compressor (rejected — recorded so this is not re-litigated)
+
+Compressor was the original primary mechanism and is **rejected**. On the physical M4 mini,
+Creator Studio's Compressor 5.3 offers **no ProRes copy/passthrough** — all ProRes settings
+re-encode, violating acceptance §5. Custom settings and the "Run Automator Workflow" job action
+are also GUI-only (sandboxed group container; not creatable via CLI/file-drop), so it could not
+even be wired programmatically. Should a future Compressor gain a true passthrough setting, it
+could be reconsidered as an alternative, but the Export-File/Folder-Action path is simpler, free,
+and provably re-encode-free, so there is no reason to.
 
 ---
 
@@ -347,8 +379,8 @@ Build is complete when:
    via `journalctl -u kiln` showing `job <id>: processing` → `done (archived)`.
 4. **Each FCP Share Destination** ("kiln — Standard/4K/Upscale/Transcode-only") produces a job
    with the corresponding `jobs` toggles, verified by reading the archived `result.json`.
-5. **Compressor does not re-encode** — the archived master byte-matches (or is ProRes-
-   equivalent to) the FCP export; deb005's transcode step is what produced `upload.mp4`.
+5. **No Mac-side re-encode** — the archived master is FCP's own ProRes export (no Compressor in
+   the loop, §7.4); deb005's transcode step is what produced `upload.mp4`.
 6. **No spaces** in any filename/foldername kiln creates; no runtime install needed (JXA via
    the always-present `osascript`, no Python/Homebrew dependency); no
    secrets in the helper or config committed to any repo.
@@ -360,8 +392,8 @@ Build is complete when:
 - Any processing on the Mac (transcode/caption/etc.) — that is deb005's job.
 - Bringing outputs back to the Mac — they are archived on the storage server.
 - Code signing / notarization / Developer ID — the Workflow Extension path was rejected in
-  the design; `kiln-submit` is a plain script invoked by Automator/Compressor, which needs no
-  signing.
+  the design; `kiln-submit` is a plain script invoked by an Automator Folder Action, which needs
+  no signing.
 - Mounting the SMB share — assumed already mounted at `--inbox` (Finder → Connect to Server →
   `smb://deb005/kiln-inbox` as the registered `kilndrop` user; see the deb005 deployment
   runbook §4). Optionally document auto-mount via a login item, but the helper only needs the

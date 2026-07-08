@@ -49,13 +49,16 @@ sudo ./install.sh
 What `install.sh` does (idempotent — safe to re-run):
 
 1. Creates the system user **`kiln`** (no login shell) and adds it to the `video`,`render` groups (GPU access).
-2. Creates `/opt/kiln` and `/var/lib/kiln/{inbox,scratch,state}`, owned by `kiln`.
+2. Creates `/opt/kiln` and `/var/content/kiln/{inbox,scratch,state}`, owned by `kiln`. The
+   inbox/scratch/state base is `/var/content` (the Samsung 980 PRO — large + near-empty) so
+   60–120 GB master drops and transcode scratch stay off the smaller boot fs; override with
+   `STATE_BASE=... ./install.sh` on another host. All three must share one filesystem.
 3. Copies the repo into `/opt/kiln`, builds `/opt/kiln/.venv`, and `pip install .[ai]` (kiln + faster-whisper).
 4. Installs the starter config `packaging/config.deb005.toml` → `/opt/kiln/config.toml` (only if one isn't already there).
 5. Installs and **enables** `kiln.service` (does not start it yet).
 6. Runs `kiln doctor` as the `kiln` user.
 
-`kiln doctor` should report the A4000, `/var/lib/kiln/*` writable and on one filesystem,
+`kiln doctor` should report the A4000, `/var/content/kiln/*` writable and on one filesystem,
 and both `/mnt/masters` + `/mnt/exports` reachable.
 
 Start it:
@@ -76,11 +79,11 @@ config path typo or a mount permission; fix and `sudo systemctl restart kiln`.
 Drop the committed sample clip as a job and confirm it lands on ark:
 
 ```bash
-sudo install -d -o kiln -g kiln /var/lib/kiln/inbox/smoketest
-sudo cp tests/fixtures/sample.mp4 /var/lib/kiln/inbox/smoketest/master.mp4
+sudo install -d -o kiln -g kiln /var/content/kiln/inbox/smoketest
+sudo cp tests/fixtures/sample.mp4 /var/content/kiln/inbox/smoketest/master.mp4
 echo '{"job_id":"smoketest","jobs":{"transcode":true,"normalize":true}}' \
-  | sudo tee /var/lib/kiln/inbox/smoketest/job.json >/dev/null
-sudo chown -R kiln:kiln /var/lib/kiln/inbox/smoketest
+  | sudo tee /var/content/kiln/inbox/smoketest/job.json >/dev/null
+sudo chown -R kiln:kiln /var/content/kiln/inbox/smoketest
 
 sleep 20   # let the watcher pick it up and process
 ls -la /mnt/masters/smoketest/ /mnt/exports/smoketest/
@@ -226,8 +229,8 @@ journalctl -u kiln-prune.service --no-pager       # what the last sweep did
 
 ## Troubleshooting
 
-- **`kiln doctor` says a `/var/lib/kiln` path isn't writable** — re-run `sudo ./install.sh`; it fixes ownership.
-- **doctor says inbox/scratch/state are on different filesystems** — they must share one; the installer puts them all under `/var/lib/kiln` on `/`. Don't relocate one onto a different mount.
+- **`kiln doctor` says a `/var/content/kiln` path isn't writable** — re-run `sudo ./install.sh`; it fixes ownership.
+- **doctor says inbox/scratch/state are on different filesystems** — they must share one filesystem, because the watcher enqueues a job by `os.rename`-ing its folder from inbox into `state/queued`, and `os.rename` cannot cross filesystems. The installer puts all three under `STATE_BASE` (`/var/content/kiln` on deb005 — the 980 PRO). If you relocate them, move the whole trio to one mount together; never split one off onto a different filesystem.
 - **Archives show UNREACHABLE** — check the ark NFS mounts: `mount | grep /mnt/masters`. If absent, `sudo mount -a` (fstab has them). Jobs safely hold in `state/pending-archive/` until ark is back, then drain automatically.
 - **Service won't start** — `journalctl -u kiln -n 40 --no-pager`. A missing `/opt/kiln/.venv/bin/kiln` means the install didn't finish; re-run it.
 - **Mac SMB rejected** — a rejection at the password prompt means the user lacks an SMB password (`smbpasswd -a`); connects-but-can't-write means the user isn't in the `kiln` group / lacks write on the inbox. macOS caches failed logins — remove `deb005` from Keychain Access and retry.

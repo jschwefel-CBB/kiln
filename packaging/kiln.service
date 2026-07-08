@@ -19,9 +19,11 @@ RestartSec=5
 # --- Hardening, relaxed exactly where kiln needs it ---
 NoNewPrivileges=true
 PrivateTmp=true
-# ProtectSystem=full makes most of the fs read-only; kiln writes only these:
+# ProtectSystem=full makes most of the fs read-only; kiln writes only these. The first
+# path is the inbox/scratch/state base (STATE_BASE); install.sh rewrites it to match if
+# STATE_BASE is overridden. /var/content is the 980 PRO on deb005.
 ProtectSystem=full
-ReadWritePaths=/var/lib/kiln /mnt/masters /mnt/exports
+ReadWritePaths=/var/content/kiln /mnt/masters /mnt/exports
 # kiln has no business in user homes.
 ProtectHome=true
 # GPU access for NVENC (ffmpeg) and CUDA (faster-whisper / ollama client).

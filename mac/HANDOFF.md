@@ -35,7 +35,10 @@ batch/fire-and-forget, and use the otherwise-idle A4000. (Decision is settled �
   **syntax-valid** (checked with `node --check`) but **has NOT been run** — see the big caveat
   below. You do not need to write it; you need to **verify and wire** it.
 - **The SMB inbox exists on deb005.** Share name **`kiln-inbox`**, authenticated as a dedicated
-  user **`kilndrop`** (guest is off). The user has the `kilndrop` SMB password.
+  user **`kilndrop`** (guest is off). The user has the `kilndrop` SMB password. (On deb005 the
+  share now lives on the `/var/content` volume — the large 980 PRO — but that's a server-side
+  detail: **you mount it by share name** (`smb://deb005/kiln-inbox` → `/Volumes/kiln-inbox`) and
+  never touch the deb005 path, so nothing changes for you.)
 - **The submit endpoint is exposed on the LAN** (this was just done). `deb005` binds the
   instant-trigger ping on **`0.0.0.0:8765`** (all interfaces), reachable at
   **`http://172.31.1.100:8765/submit`** (or `http://deb005:8765/submit` if the name resolves).

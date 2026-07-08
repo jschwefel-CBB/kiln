@@ -1,11 +1,14 @@
 # kiln config for deb005 (the RTX A4000 box). The live copy lives at
-# /opt/kiln/config.toml (installed from this file by install.sh). Local paths are on
-# the NVMe root fs (/dev/nvme0n1p2) so inbox/scratch/state share one filesystem;
-# archives are the ark NFS mounts.
+# /opt/kiln/config.toml (installed from this file by install.sh). inbox/scratch/state
+# live on the Samsung 980 PRO (/dev/nvme1n1p1, mounted /var/content) — a large, near-empty
+# volume — to keep 60–120 GB master drops and transcode scratch off the smaller boot fs.
+# They MUST stay on one filesystem together: the watcher enqueues a job by os.rename-ing
+# the job folder from inbox into state/queued, and os.rename cannot cross filesystems.
+# Archives are the ark NFS mounts.
 
-inbox       = "/var/lib/kiln/inbox"
-scratch_dir = "/var/lib/kiln/scratch"
-state_dir   = "/var/lib/kiln/state"
+inbox       = "/var/content/kiln/inbox"
+scratch_dir = "/var/content/kiln/scratch"
+state_dir   = "/var/content/kiln/state"
 
 # The storage server's NFS mounts — already mounted via /etc/fstab (_netdev,nofail).
 masters_archive = "/mnt/masters"
