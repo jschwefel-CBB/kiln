@@ -1,6 +1,6 @@
 [Unit]
 Description=kiln — daily master retention prune
-Documentation=https://github.com/jschwefel-CBB/kiln
+Documentation=https://github.com/jschwefel-workshop/kiln
 
 [Timer]
 # Run once a day. Persistent=true catches up a missed run (box asleep/off) on next boot.

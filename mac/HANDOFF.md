@@ -155,7 +155,7 @@ master against retention pruning) can be added via `--<name>` flags — see the 
 ## State of this repo / branch
 
 - You are on branch **`mac-controller`** (pushed to GitHub at
-  `github.com/jschwefel-CBB/kiln`). It contains the whole current project including this Mac
+  `github.com/jschwefel-workshop/kiln`). It contains the whole current project including this Mac
   work. `main` intentionally lags — the user pushes to `main` only after personally testing.
 - The repo can also be pulled from deb005 directly over SSH:
   `git remote add deb005 ssh://jschwefel@172.31.1.100/home/jschwefel/repositories/kiln` then
