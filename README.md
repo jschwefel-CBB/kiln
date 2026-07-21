@@ -8,12 +8,8 @@ and draft metadata — then everything is archived to your storage server automa
 Linux box with an NVIDIA GPU, and let `kiln` do the heavy lifting (NVENC transcode, Whisper
 transcription, loudness normalization, and local-LLM metadata drafting).
 
-> **License:** `kiln` is **source-available** under the **Business Source License 1.1**
-> (not an OSI "open source" license). **It is free for individuals and self-hosters.**
-> A company offering `kiln` to third parties as a commercial hosted/managed service must
-> obtain a commercial license. Each release converts to **MPL 2.0** four years after
-> publication. See [`LICENSE`](LICENSE). For commercial licensing:
-> `jschwefel@coldboreballisticsllc.com`.
+> **License:** `kiln` is licensed under the **Apache License 2.0** — free to use, modify, and
+> distribute, including commercially, with an explicit patent grant. See [`LICENSE`](LICENSE).
 
 ---
 
